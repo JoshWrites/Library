@@ -273,6 +273,44 @@ needed to be callable from opencode without bloating context, which led
 to "use an MCP," which led to "the existing MCPs have shape problems,"
 which led to Library.
 
+## Multilingual support
+
+Library handles non-English source documents (notably Hebrew, but also
+Arabic, Russian, Chinese, and 90+ other languages the embed model
+supports) without changing the primary chat model.
+
+**Retrieval is multilingual.** `multilingual-e5-large` embeds queries
+and chunks in any supported language into the same 1024-dim space.
+Cross-language ranking works: an English query against a Hebrew
+document returns the relevant Hebrew chunks, and vice versa.
+Verification: empirical cosine-similarity tests on Hebrew/English
+education-domain queries showed relevant content always ranking above
+unrelated content regardless of query/passage language pair.
+
+**Summarization is currently English-primary.** Qwen3-4B is the
+secondary model. Its English summarization is solid; on non-English
+sources it degrades — sometimes producing generic summaries,
+sometimes hallucinating, sometimes defaulting to English explanations
+of non-English material. For non-English documents, consumers should
+escalate to `return_chunks=True` early; chunks are faithful to the
+source language even when summaries aren't.
+
+**A bilingual summarizer swap is planned but not shipped.** The plan
+calls for replacing Qwen3-4B with Aya Expanse 8B (one of 23
+explicitly multilingual languages, Hebrew first-class trained). The
+swap was paused on an open question: Aya runs ~3-4x slower than
+Qwen3-4B on the secondary's Vulkan/5700XT slot, which would slow
+*every* summary call (English included), not just non-English ones.
+The dual-model alternative (Qwen3 for English, Aya for Hebrew) doesn't
+fit on the 5700 XT's 8 GB VRAM. ROCm acceleration isn't viable on
+gfx1010 (RDNA 1) hardware. The decision blocker is whether Aya's
+English summarization quality is comparable to Qwen3's — that
+benchmark hasn't been run yet.
+
+See `local-mcp-servers/docs/superpowers/plans/2026-04-26-library-multilingual-progress.md`
+for the full status, the resume path, and the cheap experiment that
+unblocks the next step.
+
 ## Tradeoffs we accepted
 
 - **One MCP for three jobs.** Could have kept three separate MCPs. We
@@ -287,12 +325,14 @@ which led to Library.
   re-fetch; documents re-convert in 0.5s. If session-warm-restore
   becomes a need, it's an additive feature, not a redesign.
 
-- **mxbai-embed-large at 512-token chunks.** Embedding model context
+- **multilingual-e5-large at 512-token chunks.** Embedding model context
   cap is 512 tokens, so we chunk at 500 chars (worst-case 1 char ≈ 1
   token) to never overflow. For prose this is small — more, smaller
   chunks. We accept the granularity hit because retrieval quality at
   smaller chunk sizes is generally fine and the alternative is rewriting
-  with a larger embed model.
+  with a larger embed model. (Originally mxbai-embed-large; swapped to
+  multilingual-e5-large for Hebrew + 90 other languages — see the
+  Multilingual support section below.)
 
 - **No retry on inference failures.** If llama-summarize times out or
   returns garbage, we degrade rather than retry. Retries hide

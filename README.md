@@ -33,9 +33,9 @@ in primary context exactly as written.
                           ↓ (HTTP localhost)                     │
    ┌──────────────────────┼──────────────────────┐              │
    ↓                      ↓                      ↓              ↓
- SearxNG :8888       llama-embed :11437     llama-summarize :11435   docling-serve :5001
- (search)            (mxbai-embed-large)    (Qwen3-4B)               (binary doc → markdown)
-                        GPU0                   GPU0                   CPU only
+ SearxNG :8888       llama-embed :11437       llama-summarize :11435   docling-serve :5001
+ (search)            (multilingual-e5-large)  (Qwen3-4B)               (binary doc → markdown)
+                        GPU1 (Vulkan)            GPU1 (Vulkan)            CPU only
 ```
 
 Library is the orchestrator. All four sidecars are independent system
@@ -48,12 +48,12 @@ force-refresh ownership), see [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites
 
-| Service           | Where it lives        | Purpose                              |
-|-------------------|-----------------------|--------------------------------------|
-| SearxNG           | `127.0.0.1:8888`      | Privacy-respecting search aggregator |
-| llama-embed       | `127.0.0.1:11437`     | mxbai-embed-large, GPU0              |
-| llama-summarize   | `127.0.0.1:11435`     | Qwen3-4B, GPU0                       |
-| docling-serve     | `127.0.0.1:5001`      | Binary document conversion (CPU)     |
+| Service           | Where it lives        | Purpose                                          |
+|-------------------|-----------------------|--------------------------------------------------|
+| SearxNG           | `127.0.0.1:8888`      | Privacy-respecting search aggregator             |
+| llama-embed       | `127.0.0.1:11437`     | multilingual-e5-large, GPU1 (Vulkan)             |
+| llama-summarize   | `127.0.0.1:11435`     | Qwen3-4B, GPU1 (Vulkan)                          |
+| docling-serve     | `127.0.0.1:5001`      | Binary document conversion (CPU)                 |
 
 The first three are part of the broader homelab AI stack (see
 `Workstation/second-opinion`). docling-serve installs as a dedicated
@@ -88,6 +88,24 @@ uv sync
 
 Anny's setup is identical except for the path. Both users get their own
 checkout, their own venv, and use the shared system sidecars.
+
+## Languages
+
+**Retrieval (embedding) is multilingual.** `multilingual-e5-large` covers
+English, Hebrew, Arabic, Russian, Chinese, and 90+ other languages.
+Cross-language retrieval works: an English query against a Hebrew document
+ranks the relevant Hebrew chunks correctly, and vice versa.
+
+**Summarization is currently English-primary.** The summarizer model
+(Qwen3-4B) handles English well but degrades on non-English source
+material — summaries may be generic, hallucinated, or default to English
+explanations of non-English content. For non-English documents, escalate
+to `return_chunks=True` early; the chunks themselves are faithful to the
+source language.
+
+A bilingual summarizer swap (Aya Expanse 8B) is planned but not yet
+shipped. See `local-mcp-servers/docs/superpowers/plans/2026-04-26-library-multilingual-progress.md`
+for status and the resume path.
 
 ## Module map
 
