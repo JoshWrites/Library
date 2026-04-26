@@ -14,13 +14,15 @@ import urllib.request
 
 
 EMBED_URL = "http://127.0.0.1:11437/v1/embeddings"
-EMBED_MODEL = "mxbai-embed-large"
+EMBED_MODEL = "multilingual-e5-large"
 REQUEST_TIMEOUT_SEC = 30
 
-# mxbai-embed-large was trained at 512 tokens; llama-server rejects inputs
-# that exceed the configured context (-c 512). We defensively cap the
-# character count per input so even token-dense content (worst case 1 char
-# per token) cannot overflow.
+# multilingual-e5-large is 512-token context (XLM-RoBERTa base); llama-server
+# rejects inputs that exceed the configured context (-c 512). We defensively
+# cap the character count per input so even token-dense content (worst case
+# 1 char per token) cannot overflow. Same 1024-dim output as mxbai — drop-in
+# replacement at the protocol level. Adds Hebrew + 90+ other languages while
+# preserving English retrieval quality within a few percent of mxbai.
 MAX_CHARS_PER_INPUT = 500
 
 
