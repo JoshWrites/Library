@@ -19,5 +19,8 @@ where = ["."]
 include = ["library*"]
 exclude = ["tests*"]
 
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
 [project.scripts]
 library = "library.server:main"
