@@ -175,7 +175,10 @@ def research(
     if not all_chunks:
         return _error("no sources could be fetched or embedded")
 
-    query_vec = embed_one(question)
+    try:
+        query_vec = embed_one(question)
+    except EmbedderError as e:
+        return _error(f"embed server unreachable for query ranking: {e}")
     scored = [(cosine_similarity(query_vec, all_embeddings[i]), i)
               for i in range(len(all_chunks))]
     scored.sort(reverse=True)
@@ -247,8 +250,11 @@ def read_file(
         _log("file_cache_hit", path=abs_path)
         entry = cached
     else:
-        with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-            content = f.read()
+        try:
+            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError as e:
+            return _error(f"cannot read file: {e}")
         strategy, chunks = chunk_file(abs_path, content)
         try:
             embeddings = _embed_chunks([c.content for c in chunks])
@@ -267,7 +273,10 @@ def read_file(
         _cache.put(entry)
         _log("file_cached", path=abs_path, entry_id=entry_id, n_chunks=len(chunks))
 
-    query_vec = embed_one(query)
+    try:
+        query_vec = embed_one(query)
+    except EmbedderError as e:
+        return _error(f"embed server unreachable for query ranking: {e}")
     scored = [(cosine_similarity(query_vec, entry.embeddings[i]), i)
               for i in range(len(entry.chunks))]
     scored.sort(reverse=True)
