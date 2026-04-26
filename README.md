@@ -1,9 +1,8 @@
 # Library
 
-A local MCP server for opencode that unifies web research, file mining, and
-on-demand skill injection into one tool surface. Designed for a homelab
-two-user, two-GPU workstation where the primary card stays loaded with the
-chat model and all retrieval work happens on the secondary card or CPU.
+A local MCP server for opencode that unifies web research, file mining, and on-demand skill injection into one tool surface. It's designed for a homelab two-user, two-GPU workstation — the primary card stays loaded with the chat model, and all retrieval work happens on the secondary card or CPU.
+
+Here's the thing: you want one tool that handles research, file mining, and skill injection all at once. That's what this does.
 
 ## What it does
 
@@ -27,15 +26,15 @@ in primary context exactly as written.
 ## Architecture (one screen)
 
 ```
-                     opencode primary model
-                              ↓ (MCP/stdio)
-                       Library MCP server  ──────────────────────┐
-                          ↓ (HTTP localhost)                     │
-   ┌──────────────────────┼──────────────────────┐              │
-   ↓                      ↓                      ↓              ↓
- SearxNG :8888       llama-embed :11437       llama-summarize :11435   docling-serve :5001
- (search)            (multilingual-e5-large)  (Qwen3-4B)               (binary doc → markdown)
-                        GPU1 (Vulkan)            GPU1 (Vulkan)            CPU only
+                      opencode primary model
+                               ↓ (MCP/stdio)
+                        Library MCP server  ──────────────────────┐
+                           ↓ (HTTP localhost)                     │
+    ┌──────────────────────┼──────────────────────┐              │
+    ↓                      ↓                      ↓              ↓
+  SearxNG :8888       llama-embed :11437       llama-summarize :11435   docling-serve :5001
+  (search)            (multilingual-e5-large)  (Qwen3-4B)               (binary doc → markdown)
+                         GPU1 (Vulkan)            GPU1 (Vulkan)            CPU only
 ```
 
 Library is the orchestrator. All four sidecars are independent system
@@ -63,7 +62,7 @@ for the full setup.
 ## Quickstart
 
 ```bash
-# Clone (Anny: or follow the same steps in your home)
+# Clone (or follow the same steps in your home)
 git clone git@github.com:JoshWrites/Library.git ~/Documents/Repos/Library
 cd ~/Documents/Repos/Library
 
@@ -86,8 +85,7 @@ uv sync
 # Restart opencode to pick up the new MCP.
 ```
 
-Anny's setup is identical except for the path. Both users get their own
-checkout, their own venv, and use the shared system sidecars.
+Your setup is identical to mine. Both users get their own checkout, their own venv, and use the shared system sidecars.
 
 ## Languages
 
@@ -120,15 +118,17 @@ library/
 ├── searcher.py      ← SearxNG queries + domain-boosted ranking.
 ├── summarizer.py    ← Secondary-model summary with structured fallback.
 └── skills/
-    └── annyvoice.md ← Voice-rewriting pass for Anny's prose.
+    └── annyvoice.md ← Voice-rewriting pass for my prose.
 ```
+
+These modules do what they say on the tin. The server is the entry point, cache handles DRAM LRU, chunkers do document vs. code strategies, converters handle binary docs, embedder does cosine similarity, fetcher handles web fetch with SSRF defense, searcher handles SearxNG queries, and summarizer handles the secondary-model summary. The skills folder is where you drop new skills.
 
 ## Running tests
 
 ```bash
 # Unit tests — no live services needed
 uv run pytest tests/test_cache.py tests/test_chunkers.py tests/test_fetcher.py \
-              tests/test_searcher.py tests/test_summarizer.py
+               tests/test_searcher.py tests/test_summarizer.py
 
 # Converter tests — mocked HTTP plus a hermetic e2e against running docling-serve
 uv run python tests/test_converters.py
@@ -148,6 +148,8 @@ the MCP, and it's callable via `library_get_skill("filename_without_ext")`.
 The first line should be a YAML frontmatter block declaring `name` and
 `description`. The rest is verbatim instructions for the primary model.
 
+Here's how you do it: you create a markdown file in the skills folder, write your instructions as plain text, and restart the MCP. That's it.
+
 ## Logs
 
 Library logs JSONL to stderr — one event per line:
@@ -160,6 +162,8 @@ Library logs JSONL to stderr — one event per line:
 Useful event names: `research_start`, `research_done`, `picked`, `web_cache_hit`,
 `web_cached`, `file_cache_hit`, `file_cached`, `converted`, `skill_returned`,
 `embed_error`, `fetch_error`. Filter with `jq -c 'select(.event == "converted")'`.
+
+These events tell you what's happening under the hood — when research starts, when files get cached, when chunks are converted, when skills are returned, and when errors occur. Keep an eye on them.
 
 ## When something breaks
 
@@ -178,3 +182,5 @@ The primary model is told to fall back to direct webfetch / read after
 ## License
 
 Private. Do not redistribute.
+
+That's it. This is mine, not yours.
