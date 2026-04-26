@@ -1,0 +1,88 @@
+"""Unified DRAM LRU cache for Library.
+
+Holds CachedEntry objects for both local files and web pages.
+Keyed by entry_id; secondary lookup by label (path or URL).
+
+File entries: keyed by make_file_id(path, mtime). Stale on mtime change.
+Web entries:  keyed by make_web_id(url, fetch_time). Never auto-expire;
+              force_refresh bypasses cache at the tool level.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+MAX_CACHED_ENTRIES = 40
+
+
+@dataclass
+class CachedEntry:
+    entry_id: str
+    source: str          # "file" | "web"
+    label: str           # absolute path or URL
+    chunks: list         # list[Chunk] for files; list[str] for web
+    embeddings: list     # list[list[float]], parallel to chunks
+    fetch_time: float
+    last_accessed: float = field(default_factory=time.time)
+
+
+def make_file_id(path: str, mtime: float) -> str:
+    h = hashlib.sha256(f"file|{path}|{mtime}".encode()).hexdigest()
+    return f"f_{h[:12]}"
+
+
+def make_web_id(url: str, fetch_time: float) -> str:
+    h = hashlib.sha256(f"web|{url}|{fetch_time}".encode()).hexdigest()
+    return f"w_{h[:12]}"
+
+
+class Cache:
+    def __init__(self, max_entries: int = MAX_CACHED_ENTRIES) -> None:
+        self._entries: OrderedDict[str, CachedEntry] = OrderedDict()
+        self._max = max_entries
+
+    def get(self, entry_id: str) -> Optional[CachedEntry]:
+        entry = self._entries.get(entry_id)
+        if entry is None:
+            return None
+        self._entries.move_to_end(entry_id)
+        entry.last_accessed = time.time()
+        return entry
+
+    def get_by_label(self, label: str) -> Optional[CachedEntry]:
+        for entry in reversed(list(self._entries.values())):
+            if entry.label == label:
+                self._entries.move_to_end(entry.entry_id)
+                entry.last_accessed = time.time()
+                return entry
+        return None
+
+    def put(self, entry: CachedEntry) -> None:
+        self._entries[entry.entry_id] = entry
+        self._entries.move_to_end(entry.entry_id)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+
+    def release(self, entry_id: str) -> bool:
+        return self._entries.pop(entry_id, None) is not None
+
+    def lookup_file(self, path: str) -> Optional[CachedEntry]:
+        abs_path = os.path.abspath(path)
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except OSError:
+            return None
+        expected_id = make_file_id(abs_path, mtime)
+        return self.get(expected_id)
+
+    def stats(self) -> dict:
+        return {
+            "cached_entries": len(self._entries),
+            "max_entries": self._max,
+            "entry_ids": list(self._entries.keys()),
+        }
