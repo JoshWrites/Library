@@ -34,7 +34,8 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 from .cache import Cache, CachedEntry, make_file_id, make_web_id
-from .chunkers import chunk as chunk_file
+from .chunkers import chunk as chunk_file, chunk_document
+from .converters import ConversionError, convert_to_markdown, is_supported as is_binary_doc
 from .embedder import EmbedderError, cosine_similarity, embed_batch, embed_one
 from .fetcher import FetchError, fetch_and_extract
 from .searcher import search, rank_results
@@ -225,6 +226,13 @@ def read_file(
     specific in a large file — it protects primary context by returning only
     what is relevant. Use read when you need the file verbatim.
 
+    Supported formats:
+      - Text: .md .txt .rst .py .js .ts .go .rs .json .yaml .toml ... (chunked directly)
+      - Binary documents: .pdf .docx .pptx .xlsx .epub .html .htm
+        and images .png .jpg .jpeg .tiff (converted to markdown via docling-serve
+        sidecar, then chunked). Conversion needs the docling-serve daemon
+        running on :5001; if down, returns a structured error.
+
     Escalation: same 3-round protocol as research(). A new query on the same
     file is a new round; return_chunks=True on the same query is not.
 
@@ -250,12 +258,21 @@ def read_file(
         _log("file_cache_hit", path=abs_path)
         entry = cached
     else:
-        try:
-            with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
-                content = f.read()
-        except OSError as e:
-            return _error(f"cannot read file: {e}")
-        strategy, chunks = chunk_file(abs_path, content)
+        if is_binary_doc(abs_path):
+            try:
+                content = convert_to_markdown(abs_path)
+            except ConversionError as e:
+                return _error(f"document conversion failed: {e}")
+            chunks = chunk_document(content)
+            strategy = "document"
+            _log("converted", path=abs_path, n_chunks=len(chunks), md_chars=len(content))
+        else:
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except OSError as e:
+                return _error(f"cannot read file: {e}")
+            strategy, chunks = chunk_file(abs_path, content)
         try:
             embeddings = _embed_chunks([c.content for c in chunks])
         except EmbedderError as e:
@@ -271,7 +288,7 @@ def read_file(
             fetch_time=mtime,
         )
         _cache.put(entry)
-        _log("file_cached", path=abs_path, entry_id=entry_id, n_chunks=len(chunks))
+        _log("file_cached", path=abs_path, entry_id=entry_id, n_chunks=len(chunks), strategy=strategy)
 
     try:
         query_vec = embed_one(query)
