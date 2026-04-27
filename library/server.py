@@ -38,6 +38,7 @@ from .chunkers import chunk as chunk_file, chunk_document
 from .converters import ConversionError, convert_to_markdown, is_supported as is_binary_doc
 from .embedder import EmbedderError, cosine_similarity, embed_batch, embed_one
 from .fetcher import FetchError, fetch_and_extract
+from .opencode_state import get_active_session_state
 from .searcher import search, rank_results
 from .summarizer import summarize
 
@@ -344,6 +345,57 @@ def get_skill(name: str) -> dict:
     content = skill_path.read_text(encoding="utf-8")
     _log("skill_returned", name=name, chars=len(content))
     return {"layer": "skill", "name": name, "content": content}
+
+
+@mcp.tool()
+def context_usage(directory: str | None = None) -> dict:
+    """Report current context-window usage for the active opencode session.
+
+    Use this when the user asks "how much context have I used", before a long
+    operation that would consume significant context, or when deciding
+    whether to start a new session. Returns ground-truth numbers from
+    opencode's own session store — no estimation.
+
+    Resolution: prefers the most recent session whose working directory
+    matches `directory` (default: this server's cwd, which is usually the
+    agent's project root). If no session is found in that directory, falls
+    back to the most recently updated session anywhere on the calling user's
+    account. The `directory_match` field in the response signals which path
+    was taken, so the answer can be honest about scope.
+
+    Per-user by construction: an MCP server spawned by opencode runs as the
+    calling user's uid and reads ~/.local/share/opencode/opencode.db — so
+    levine and anny each see their own sessions, never each other's.
+
+    Args:
+        directory: Optional working-directory filter. Defaults to the
+                   server's cwd. Pass an explicit absolute path to inspect a
+                   different project's session.
+
+    Returns:
+        Context layer:
+            {"layer": "context",
+             "session_id": "ses_...",
+             "session_title": "Dev server startup",
+             "session_directory": "/path/to/project",
+             "directory_match": true,                  # false on fallback
+             "model": "providerID/modelID",
+             "context_limit": 65536,                   # tokens; null if unknown
+             "current_tokens": 33962,                  # last turn total input
+             "pct_used": 0.518,                        # null if limit unknown
+             "input": 213,                             # last turn fresh input
+             "output": 241,                            # last turn output
+             "reasoning": 0,
+             "cache_read": 33508,                      # cache reuse this turn
+             "cache_write": 0,
+             "turn_count": 47,                         # assistant turns total
+             "session_age_min": 12.4}
+        Error layer:  {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    state = get_active_session_state(directory)
+    if "error" in state:
+        return _error(state["error"])
+    return {"layer": "context", **state}
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

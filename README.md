@@ -6,13 +6,14 @@ Here's the thing: you want one tool that handles research, file mining, and skil
 
 ## What it does
 
-Three MCP tools, one return contract:
+Four MCP tools, one return contract:
 
 | Tool                    | Purpose                                       |
 |-------------------------|-----------------------------------------------|
 | `library_research`      | Web search → fetch → chunk → embed → rank → summarize |
 | `library_read_file`     | Local file (or binary doc) → chunk → embed → rank → summarize |
 | `library_get_skill`     | Verbatim skill instruction set, no pipeline   |
+| `library_context_usage` | Current opencode session token usage from the local DB |
 
 `research` and `read_file` return a **summary** by default. If the summary is
 insufficient, the same call with `return_chunks=True` returns the top-ranked
@@ -22,6 +23,13 @@ verbatim chunks. This protects primary-model context — a 50-page PDF returns
 `get_skill` returns the full skill content as plain text — skills are
 finalized instruction sets (e.g., voice-rewriting passes) that should land
 in primary context exactly as written.
+
+`context_usage` reads opencode's own SQLite session store and reports the
+active session's token total vs. the model's configured context limit. Use
+when the user asks "how much context have I used" — burns ~150 tokens
+instead of the ~1500-token guess the agent would otherwise produce. Per-user
+by construction: each user's MCP subprocess reads their own
+`~/.local/share/opencode/opencode.db`, never anyone else's.
 
 ## Architecture (one screen)
 
