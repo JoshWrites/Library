@@ -137,7 +137,17 @@ def get_active_session_state(directory: str | None = None) -> dict:
                 continue
             if d.get("role") != "assistant":
                 continue
-            if "tokens" not in d or not isinstance(d["tokens"], dict):
+            tokens = d.get("tokens")
+            if not isinstance(tokens, dict):
+                continue
+            # Skip in-flight placeholder messages: opencode creates an
+            # assistant row at request time with all-zero token fields and
+            # no `total` key, then updates it on completion. The placeholder
+            # is the *most recent* row when a tool call is in-flight (e.g.
+            # the call this tool is responding to), so picking it would
+            # always report 0. The completed message has both `total` and
+            # the `finish` field.
+            if "total" not in tokens:
                 continue
             last_turn = d
             break

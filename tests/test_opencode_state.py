@@ -108,6 +108,36 @@ def test_falls_back_to_most_recent_when_no_match(tmp_path, monkeypatch):
     assert result["directory_match"] is False
 
 
+def test_skips_placeholder_assistant_message(tmp_path, monkeypatch):
+    """opencode writes a placeholder assistant row when a tool call is
+    in-flight: tokens dict exists but has no `total` key, and input/output
+    are zero. We must skip it and use the previous completed turn — otherwise
+    every tool-triggered context_usage call reports 0."""
+    db = tmp_path / "opencode.db"
+    cfg = tmp_path / "opencode.json"
+    _make_fixture_db(db, sessions=[
+        {"id": "ses", "directory": "/p", "title": "t",
+         "time_created": 1000, "time_updated": 9999},
+    ], messages=[
+        {"id": "m_completed", "session_id": "ses", "time_created": 100, "data": {
+            "role": "assistant", "providerID": "p", "modelID": "m",
+            "tokens": {"total": 1500, "input": 5, "output": 50,
+                       "reasoning": 0, "cache": {"read": 1445, "write": 0}},
+        }},
+        {"id": "m_placeholder", "session_id": "ses", "time_created": 200, "data": {
+            "role": "assistant", "providerID": "p", "modelID": "m",
+            "tokens": {"input": 0, "output": 0, "reasoning": 0,
+                       "cache": {"read": 0, "write": 0}},  # no `total` key
+        }},
+    ])
+    _config_with_limit(cfg, "p", "m", 4000)
+    monkeypatch.setattr(opencode_state, "DB_PATH", db)
+    monkeypatch.setattr(opencode_state, "CONFIG_PATH", cfg)
+
+    result = opencode_state.get_active_session_state("/p")
+    assert result["current_tokens"] == 1500  # the completed turn, not the placeholder
+
+
 def test_skips_user_messages_finds_assistant(tmp_path, monkeypatch):
     db = tmp_path / "opencode.db"
     cfg = tmp_path / "opencode.json"
