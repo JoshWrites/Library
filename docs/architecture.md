@@ -307,6 +307,14 @@ gfx1010 (RDNA 1) hardware. The decision blocker is whether Aya's
 English summarization quality is comparable to Qwen3's — that
 benchmark hasn't been run yet.
 
+**VRAM budget update (2026-04-29):** the 5700 XT now hosts a third
+resident — `llama-coder` (Qwen2.5-Coder-3B, :11438) for Zed edit
+prediction. Validated co-resident with summarize + embed under load
+(see `edit-prediction-on-secondary-research.md`). Steady-state usage
+is ~8.12 GB of the card's 8.57 GB; ~0.45 GB free. Any future swap that
+*adds* VRAM pressure (Aya-8B, multi-model summarize) now has to
+account for this third tenant.
+
 See `local-mcp-servers/docs/superpowers/plans/2026-04-26-library-multilingual-progress.md`
 for the full status, the resume path, and the cheap experiment that
 unblocks the next step.

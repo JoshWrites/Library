@@ -50,6 +50,13 @@ services with their own lifecycles. If any sidecar is down, Library returns
 a structured `{"layer": "error", ...}` — the MCP protocol never sees a
 crash.
 
+A fifth service, `llama-coder` on `:11438` (Qwen2.5-Coder-3B, GPU1 / Vulkan),
+also lives on the secondary card but is **not a Library client** — it's the
+edit-prediction backend for Zed. Library doesn't call it; it shares VRAM
+with llama-embed and llama-summarize. See
+[docs/edit-prediction-on-secondary-research.md](docs/edit-prediction-on-secondary-research.md)
+for the validation story.
+
 For the *why* behind the design (two-layer retrieval, 3-round escalation,
 force-refresh ownership), see [docs/architecture.md](docs/architecture.md).
 
