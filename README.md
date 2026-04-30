@@ -133,7 +133,7 @@ library/
 ├── searcher.py      ← SearxNG queries + domain-boosted ranking.
 ├── summarizer.py    ← Secondary-model summary with structured fallback.
 └── skills/
-    └── annyvoice.md ← Voice-rewriting pass for my prose.
+    └── (drop your skill markdown files here; empty by default)
 ```
 
 These modules do what they say on the tin. The server is the entry point, cache handles DRAM LRU, chunkers do document vs. code strategies, converters handle binary docs, embedder does cosine similarity, fetcher handles web fetch with SSRF defense, searcher handles SearxNG queries, and summarizer handles the secondary-model summary. The skills folder is where you drop new skills.

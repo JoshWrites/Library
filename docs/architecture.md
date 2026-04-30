@@ -246,11 +246,11 @@ config flag away.
 
 ### Why files travel via HTTP, not paths
 
-docling-serve runs as a dedicated system user with `ProtectHome=yes` —
-it cannot read `/home/levine/` or `/home/anny/`. Library reads file
-bytes itself (with the session's user permissions) and POSTs them. This
-keeps docling-serve isolated from user data and lets it serve both users
-without any cross-home permission complexity.
+docling-serve runs as a dedicated system user with `ProtectHome=yes`,
+so it cannot read user home directories. Library reads file bytes
+itself, with the session's user permissions, and POSTs them. This
+keeps docling-serve isolated from user data and lets it serve every
+local user without cross-home permission complexity.
 
 ## Skills
 
@@ -261,17 +261,18 @@ intended for the primary to follow as written.
 
 Why a tool, not just bundling skills into AGENTS.md:
 
-- Skills can be long (annyvoice is 6 KB). Loading every skill into every
-  session burns context.
-- Skills are situational. AnnyVoice applies to prose-rewriting moments,
-  not every turn. Pull-on-demand keeps context lean.
-- New skills can land without rewriting AGENTS.md every time — drop the
+- Skills can be long (a single voice-rewriting pass clocks in at ~6 KB).
+  Loading every skill into every session burns context.
+- Skills are situational. A prose-rewriting skill applies to prose
+  moments, not every turn. Pull-on-demand keeps context lean.
+- New skills can land without rewriting AGENTS.md every time. Drop the
   markdown, restart the MCP, done.
 
-The first skill, `annyvoice.md`, was the seed of this whole project: it
-needed to be callable from opencode without bloating context, which led
-to "use an MCP," which led to "the existing MCPs have shape problems,"
-which led to Library.
+The first skill was a voice-rewriting pass for the user's own prose,
+and that one skill seeded this whole project: it needed to be callable
+from opencode without bloating context, which led to "use an MCP,"
+which led to "the existing MCPs have shape problems," which led to
+Library.
 
 ## Multilingual support
 
@@ -365,8 +366,8 @@ unblocks the next step.
   letting the document chunker split mid-table.
 - **Persistent cache.** SQLite or filesystem-backed entries so a session
   restart doesn't lose state. Only meaningful once we have heavy users.
-- **More skills.** AnnyVoice is the seed. As more proven instruction
-  sets emerge, they drop in without code changes.
+- **More skills.** The voice-rewriting pass was the seed. As more
+  proven instruction sets emerge, they drop in without code changes.
 
 ## Provenance
 

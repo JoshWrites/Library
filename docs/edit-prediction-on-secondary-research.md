@@ -122,8 +122,9 @@ ingest runs from thrashing.
 llama-swap serializes — one model resident at a time on this card. If
 ingest is running and you start typing in Zed, edit prediction stalls
 until the current embed/summarize finishes. Solo work: fine.
-Multi-user (anny editing while ingest runs): occasional stalls. Worth
-naming because it's a behavioral change, not just a config change.
+Multi-user (a second user editing while ingest runs): occasional
+stalls. Worth naming because it is a behavioral change, not just a
+config change.
 
 ## Resolved: what's actually on :11437
 
@@ -370,8 +371,8 @@ Either belongs in the systemd unit's ExecStartPost, not just docs.
 
 - Speculative decoding (Zeta's n-gram trick). Worth revisiting if
   cold-load isn't the bottleneck and tokens/sec is.
-- Multi-user concurrency on edit prediction (anny + levine typing
-  simultaneously). llama-swap serializes; this is a known-limitation
+- Multi-user concurrency on edit prediction (two local users typing
+  simultaneously). llama-swap serializes; this is a known limitation
   to revisit if it bites.
 - Replacing Zed's edit-prediction protocol with a custom one tuned
   for next-edit (vs. completion). Stay on `open_ai_compatible_api`

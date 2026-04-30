@@ -326,13 +326,15 @@ def get_skill(name: str) -> dict:
     """Retrieve a skill's full instruction set by name.
 
     Skills are on-demand instruction sets stored in the Library's skills/
-    directory. They are returned verbatim — no chunking, no embedding, no
+    directory. They are returned verbatim - no chunking, no embedding, no
     summarization. The primary model applies the skill's instructions directly.
 
-    Available skills: annyvoice
+    Available skills depend on what files exist in the skills/ directory at
+    runtime; the directory is empty by default. Call with a name you expect
+    to exist or with a placeholder; on miss the response lists what is there.
 
     Args:
-        name: Skill name without extension (e.g., "annyvoice").
+        name: Skill name without extension (e.g., "voice-rewrite").
 
     Returns:
         {"layer": "skill", "name": ..., "content": ...}
@@ -364,8 +366,8 @@ def context_usage(directory: str | None = None) -> dict:
     was taken, so the answer can be honest about scope.
 
     Per-user by construction: an MCP server spawned by opencode runs as the
-    calling user's uid and reads ~/.local/share/opencode/opencode.db — so
-    levine and anny each see their own sessions, never each other's.
+    calling user's uid and reads ~/.local/share/opencode/opencode.db, so
+    each Linux user on the workstation sees only their own sessions.
 
     Args:
         directory: Optional working-directory filter. Defaults to the

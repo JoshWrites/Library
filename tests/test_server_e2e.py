@@ -100,12 +100,22 @@ def test_read_file_cache_hit_on_second_call():
         os.unlink(path)
 
 
-def test_get_skill_annyvoice():
-    result = _server_mod.get_skill("annyvoice")
-    assert result["layer"] == "skill"
-    assert result["name"] == "annyvoice"
-    assert len(result["content"]) > 100
-    assert "voice" in result["content"].lower()
+def test_get_skill_with_fixture():
+    fixture_name = "test_fixture_skill"
+    fixture_path = _server_mod.SKILLS_DIR / f"{fixture_name}.md"
+    fixture_content = (
+        "# Test fixture skill\n\n"
+        "This skill exists for the test suite. "
+        "It is created and removed inside this test.\n"
+    )
+    fixture_path.write_text(fixture_content, encoding="utf-8")
+    try:
+        result = _server_mod.get_skill(fixture_name)
+        assert result["layer"] == "skill"
+        assert result["name"] == fixture_name
+        assert result["content"] == fixture_content
+    finally:
+        fixture_path.unlink(missing_ok=True)
 
 
 def test_get_skill_missing_returns_error():
