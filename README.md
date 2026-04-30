@@ -196,6 +196,6 @@ The primary model is told to fall back to direct webfetch / read after
 
 ## License
 
-Private. Do not redistribute.
-
-That's it. This is mine, not yours.
+MIT. See the LICENSE file in the umbrella repo
+(`2gpu-local-ai-workstation`) for the full text. Library is included
+there as a submodule and shares its license.
