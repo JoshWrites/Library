@@ -7,3 +7,8 @@ __pycache__/
 dist/
 build/
 *.lock
+
+# Bench artifacts that are too large or empty for git
+bench/e3-server.log
+bench/e3-dmesg-before.log
+bench/e3-dmesg-after.log
