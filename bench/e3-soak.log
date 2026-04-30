@@ -1,0 +1,44 @@
+[2026-04-29T11:19:13+03:00] E3 start. Duration: 7200s. Model: /home/levine/models/qwen2.5-coder-3b/qwen2.5-coder-3b-instruct-q4_k_m.gguf. Port: 11500
+[2026-04-29T11:19:14+03:00] Building code-prefix corpus from /home/levine/Documents/Repos/Library/library/...
+[2026-04-29T11:19:14+03:00] Corpus: 56696 bytes
+[2026-04-29T11:19:14+03:00] Launching Qwen2.5-Coder-3B on port 11500 (Vulkan1, ngl=99, c=4096)...
+[2026-04-29T11:19:15+03:00] Test server ready.
+[2026-04-29T11:19:15+03:00] End epoch: 1777457955 (2026-04-29T13:19:15+03:00)
+[2026-04-29T11:19:15+03:00] Workers up. PIDs: server=2187907 edit=2188034 embed=2188035 vram=2188033
+[2026-04-29T11:19:15+03:00] Soak running. Will report periodically.
+[2026-04-29T11:34:15+03:00] Progress: edits=450 (fail=0
+0) embeds=30 (fail=0
+0) vram=8.12GB
+[2026-04-29T11:49:15+03:00] Progress: edits=900 (fail=0
+0) embeds=60 (fail=0
+0) vram=8.12GB
+[2026-04-29T12:04:15+03:00] Progress: edits=1350 (fail=0
+0) embeds=90 (fail=0
+0) vram=8.12GB
+[2026-04-29T12:19:16+03:00] Progress: edits=1800 (fail=0
+0) embeds=121 (fail=0
+0) vram=8.12GB
+[2026-04-29T12:34:16+03:00] Progress: edits=2250 (fail=0
+0) embeds=151 (fail=0
+0) vram=8.12GB
+[2026-04-29T12:49:16+03:00] Progress: edits=2700 (fail=0
+0) embeds=181 (fail=0
+0) vram=8.12GB
+[2026-04-29T13:04:16+03:00] Progress: edits=3150 (fail=0
+0) embeds=211 (fail=0
+0) vram=8.12GB
+[2026-04-29T13:19:16+03:00] Progress: edits=3600 (fail=0
+0) embeds=240 (fail=0
+0) vram=8.12GB
+[2026-04-29T13:19:16+03:00] Duration window closed. Stopping workers...
+[2026-04-29T13:19:16+03:00] Computing summary...
+--- E3 summary ---
+edit-prediction: n=3600 ok=3600 fail=0 p50=777ms p95=814ms
+embed: n=240 ok=240 fail=0 p50=388ms p95=583ms
+VRAM used: start=8.12GB  end=8.12GB  max=8.12GB  delta=+0MB
+Server stderr error-class lines: 1
+  llama_params_fit: failed to fit params to free device memory: n_gpu_layers already set by user to 99, abort
+New GPU-relevant dmesg lines: 0
+[2026-04-29T13:19:19+03:00] E3 complete.
+[2026-04-29T13:19:19+03:00] Cleanup: tearing down workers and test server...
+[2026-04-29T13:19:20+03:00] Cleanup done. Exit code: 0

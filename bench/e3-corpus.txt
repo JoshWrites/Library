@@ -1,0 +1,1562 @@
+"""Binary document conversion via docling-serve sidecar.
+
+Posts file bytes to the local docling-serve daemon (default :5001) and
+returns markdown. Callers feed the markdown into the existing document
+chunker — no format-specific chunking lives here.
+
+Design: Library reads file bytes itself (it has the user's permissions);
+docling-serve does not need filesystem access to user paths. This keeps
+docling-serve isolated and lets it run as a dedicated system user.
+"""
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+# Multipart formatting via stdlib only — no extra deps.
+import mimetypes
+import os
+import secrets
+
+
+DOCLING_URL = "http://127.0.0.1:5001/v1/convert/file"
+CONVERT_TIMEOUT_SEC = 120  # generous; large PDFs can take a while
+MAX_BYTES = 50_000_000  # 50 MB cap per document
+
+# Extensions docling-serve handles. Keep narrow in V1; expand as needed.
+SUPPORTED_EXTS: frozenset[str] = frozenset({
+    ".pdf", ".docx", ".pptx", ".xlsx",
+    ".html", ".htm", ".epub",
+    ".png", ".jpg", ".jpeg", ".tiff", ".tif",
+})
+
+
+class ConversionError(RuntimeError):
+    pass
+
+
+def is_supported(path: str) -> bool:
+    """True if docling-serve handles this extension."""
+    return Path(path).suffix.lower() in SUPPORTED_EXTS
+
+
+def convert_to_markdown(path: str) -> str:
+    """POST file bytes to docling-serve, return markdown.
+
+    Raises ConversionError on any failure (file too large, daemon down,
+    HTTP error, malformed response). Caller decides how to surface the
+    error to the MCP client.
+    """
+    abs_path = os.path.abspath(path)
+    try:
+        size = os.path.getsize(abs_path)
+    except OSError as e:
+        raise ConversionError(f"cannot stat {abs_path}: {e}") from e
+    if size > MAX_BYTES:
+        raise ConversionError(
+            f"file too large for conversion: {size} bytes > {MAX_BYTES}"
+        )
+
+    try:
+        with open(abs_path, "rb") as f:
+            file_bytes = f.read()
+    except OSError as e:
+        raise ConversionError(f"cannot read {abs_path}: {e}") from e
+
+    body, content_type = _build_multipart(
+        filename=os.path.basename(abs_path),
+        file_bytes=file_bytes,
+        fields={"to_formats": "md"},
+    )
+    req = urllib.request.Request(
+        DOCLING_URL,
+        data=body,
+        headers={"Content-Type": content_type, "Accept": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=CONVERT_TIMEOUT_SEC) as resp:
+            raw = resp.read()
+    except urllib.error.HTTPError as e:
+        raise ConversionError(
+            f"docling HTTP {e.code}: {e.read().decode(errors='replace')[:200]}"
+        ) from e
+    except urllib.error.URLError as e:
+        raise ConversionError(
+            f"docling-serve unreachable at {DOCLING_URL}: {e.reason}"
+        ) from e
+    except TimeoutError as e:
+        raise ConversionError(f"docling timeout after {CONVERT_TIMEOUT_SEC}s") from e
+
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ConversionError(f"docling returned invalid JSON: {e}") from e
+
+    if parsed.get("status") != "success":
+        errors = parsed.get("errors") or "unknown"
+        raise ConversionError(f"docling status={parsed.get('status')!r}: {errors}")
+
+    md = (parsed.get("document") or {}).get("md_content")
+    if not isinstance(md, str) or not md.strip():
+        raise ConversionError("docling response missing md_content")
+    return md
+
+
+def _build_multipart(
+    *, filename: str, file_bytes: bytes, fields: dict[str, str]
+) -> tuple[bytes, str]:
+    """Assemble a multipart/form-data body. stdlib-only, no `requests` dep.
+
+    Returns (body_bytes, content_type_header).
+    """
+    boundary = "----LibraryBoundary" + secrets.token_hex(8)
+    crlf = b"\r\n"
+    parts: list[bytes] = []
+
+    for name, value in fields.items():
+        parts.append(f"--{boundary}".encode())
+        parts.append(f'Content-Disposition: form-data; name="{name}"'.encode())
+        parts.append(b"")
+        parts.append(value.encode())
+
+    mime = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    parts.append(f"--{boundary}".encode())
+    parts.append(
+        f'Content-Disposition: form-data; name="files"; filename="{filename}"'.encode()
+    )
+    parts.append(f"Content-Type: {mime}".encode())
+    parts.append(b"")
+    parts.append(file_bytes)
+    parts.append(f"--{boundary}--".encode())
+    parts.append(b"")
+
+    body = crlf.join(parts)
+    return body, f"multipart/form-data; boundary={boundary}"
+#!/usr/bin/env python3
+"""Library MCP server.
+
+Three tools:
+
+  research(question, max_sources, return_chunks, force_refresh)
+    → summary layer (default) or chunk layer (return_chunks=True)
+    Web acquisition: SearxNG search → fetch → chunk → embed → rank → summarize
+
+  read_file(path, query, return_chunks)
+    → summary layer (default) or chunk layer (return_chunks=True)
+    Local acquisition: read file → chunk → embed → rank → summarize
+
+  get_skill(name)
+    → skill layer: full skill file contents, no pipeline
+
+Escalation protocol (primary carries round count):
+  - Call with return_chunks=False first (summary layer, can_escalate=True)
+  - Call again with return_chunks=True if summary is insufficient (same round)
+  - A new/refined query starts a new round (max 3 rounds per topic)
+  - After 3 rounds on a topic without sufficient result: fetch directly
+  - A new topic always starts at round 1
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+from mcp.server.fastmcp import FastMCP
+
+from .cache import Cache, CachedEntry, make_file_id, make_web_id
+from .chunkers import chunk as chunk_file, chunk_document
+from .converters import ConversionError, convert_to_markdown, is_supported as is_binary_doc
+from .embedder import EmbedderError, cosine_similarity, embed_batch, embed_one
+from .fetcher import FetchError, fetch_and_extract
+from .opencode_state import get_active_session_state
+from .searcher import search, rank_results
+from .summarizer import summarize
+
+
+# ── Configuration ────────────────────────────────────────────────────────────
+
+DEFAULT_MAX_SOURCES = 5
+DEFAULT_TOP_K = 5
+SKILLS_DIR = Path(__file__).parent / "skills"
+_EMBED_BATCH = 16
+
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+
+def _log(event: str, **fields: Any) -> None:
+    line = {"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "event": event, **fields}
+    print(json.dumps(line), file=sys.stderr, flush=True)
+
+
+# ── Shared pipeline helpers ───────────────────────────────────────────────────
+
+_cache = Cache()
+
+
+def _embed_chunks(contents: list[str]) -> list[list[float]]:
+    vectors: list[list[float]] = []
+    for i in range(0, len(contents), _EMBED_BATCH):
+        batch = contents[i: i + _EMBED_BATCH]
+        vectors.extend(embed_batch(batch))
+    return vectors
+
+
+def _error(msg: str) -> dict:
+    return {"layer": "error", "error": msg, "can_escalate": False}
+
+
+# ── MCP tools ─────────────────────────────────────────────────────────────────
+
+mcp = FastMCP("library")
+
+
+@mcp.tool()
+def research(
+    question: str,
+    max_sources: int = DEFAULT_MAX_SOURCES,
+    return_chunks: bool = False,
+    force_refresh: bool = False,
+) -> dict:
+    """Answer a research question from the web.
+
+    Returns a summary by default. If the summary is insufficient, call again
+    with return_chunks=True to get the ranked raw chunks (same round — does
+    not count toward the 3-round limit).
+
+    Escalation protocol:
+      Round 1: research(question)                       → summary
+               research(question, return_chunks=True)   → chunks (same round)
+      Round 2: research(refined_question)               → summary
+      Round 3: research(further_refined_question)       → summary
+      After 3 rounds without sufficient result: fetch directly (last resort).
+      A new topic always resets to round 1.
+
+    force_refresh=True bypasses the cache and re-fetches all sources. Use
+    only when instructed by the user — the user is a more reliable judge of
+    staleness than the primary model, which never sees the raw source.
+
+    Args:
+        question: Research question in plain English.
+        max_sources: Number of sources to fetch and consult (default 5, max 8).
+        return_chunks: If True, return ranked chunks instead of summary.
+        force_refresh: If True, bypass cache and re-fetch all sources.
+
+    Returns:
+        Summary layer: {"layer": "summary", "query": ..., "summary": ...,
+                        "sources": [...], "confidence": ..., "notes": ..., "can_escalate": true}
+        Chunk layer:   {"layer": "chunks", "query": ..., "results": [...], "can_escalate": false}
+        Error layer:   {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    max_sources = max(1, min(int(max_sources), 8))
+    t0 = time.time()
+    _log("research_start", question=question, max_sources=max_sources,
+         return_chunks=return_chunks, force_refresh=force_refresh)
+
+    all_results = search(question)
+    if not all_results:
+        return _error("SearxNG returned no results for all query variations")
+
+    picked = rank_results(all_results, question, max_sources)
+    _log("picked", count=len(picked), urls=[p.get("url") for p in picked])
+
+    all_chunks: list = []
+    all_embeddings: list = []
+    source_map: list[dict] = []
+
+    for r in picked:
+        url = r.get("url", "")
+        if not url:
+            continue
+
+        cached = None if force_refresh else _cache.get_by_label(url)
+
+        if cached is not None:
+            _log("web_cache_hit", url=url)
+            entry = cached
+        else:
+            try:
+                title, text = fetch_and_extract(url)
+            except FetchError as e:
+                _log("fetch_error", url=url, error=str(e))
+                continue
+
+            _, chunks = chunk_file(url + ".md", text)
+            try:
+                embeddings = _embed_chunks([c.content for c in chunks])
+            except EmbedderError as e:
+                _log("embed_error", url=url, error=str(e))
+                continue
+
+            fetch_time = time.time()
+            entry_id = make_web_id(url, fetch_time)
+            entry = CachedEntry(
+                entry_id=entry_id,
+                source="web",
+                label=url,
+                chunks=chunks,
+                embeddings=embeddings,
+                fetch_time=fetch_time,
+            )
+            _cache.put(entry)
+            _log("web_cached", url=url, entry_id=entry_id, n_chunks=len(chunks))
+
+        all_chunks.extend(entry.chunks)
+        all_embeddings.extend(entry.embeddings)
+        source_map.extend([{"url_or_path": url, "title": r.get("title", url)}] * len(entry.chunks))
+
+    if not all_chunks:
+        return _error("no sources could be fetched or embedded")
+
+    try:
+        query_vec = embed_one(question)
+    except EmbedderError as e:
+        return _error(f"embed server unreachable for query ranking: {e}")
+    scored = [(cosine_similarity(query_vec, all_embeddings[i]), i)
+              for i in range(len(all_chunks))]
+    scored.sort(reverse=True)
+    top = scored[:max(1, min(DEFAULT_TOP_K, len(scored)))]
+
+    if return_chunks:
+        results = []
+        for score, i in top:
+            c = all_chunks[i]
+            results.append({
+                "chunk_id": c.chunk_id,
+                "score": round(score, 4),
+                "content": c.content,
+                "metadata": {**c.metadata, "url_or_path": source_map[i]["url_or_path"]},
+            })
+        _log("research_chunks_returned", n=len(results), elapsed_sec=round(time.time() - t0, 2))
+        return {"layer": "chunks", "query": question, "results": results, "can_escalate": False}
+
+    top_chunks_for_summary = [
+        {
+            "content": all_chunks[i].content,
+            "url_or_path": source_map[i]["url_or_path"],
+            "title": source_map[i]["title"],
+        }
+        for _, i in top
+    ]
+    result = summarize(question, top_chunks_for_summary)
+    _log("research_done", confidence=result.confidence, elapsed_sec=round(time.time() - t0, 2))
+    return result.to_dict(question)
+
+
+@mcp.tool()
+def read_file(
+    path: str,
+    query: str,
+    return_chunks: bool = False,
+) -> dict:
+    """Answer a question about a local file's content.
+
+    Returns a summary by default. If the summary is insufficient, call again
+    with return_chunks=True to get ranked verbatim chunks (same round).
+
+    Prefer this over the built-in read tool when understanding something
+    specific in a large file — it protects primary context by returning only
+    what is relevant. Use read when you need the file verbatim.
+
+    Supported formats:
+      - Text: .md .txt .rst .py .js .ts .go .rs .json .yaml .toml ... (chunked directly)
+      - Binary documents: .pdf .docx .pptx .xlsx .epub .html .htm
+        and images .png .jpg .jpeg .tiff (converted to markdown via docling-serve
+        sidecar, then chunked). Conversion needs the docling-serve daemon
+        running on :5001; if down, returns a structured error.
+
+    Escalation: same 3-round protocol as research(). A new query on the same
+    file is a new round; return_chunks=True on the same query is not.
+
+    Args:
+        path: Absolute or workspace-relative path.
+        query: The question or topic to match chunks against.
+        return_chunks: If True, return ranked chunks instead of summary.
+
+    Returns:
+        Summary layer: {"layer": "summary", "query": ..., "summary": ...,
+                        "sources": [...], "confidence": ..., "notes": ..., "can_escalate": true}
+        Chunk layer:   {"layer": "chunks", "query": ..., "results": [...], "can_escalate": false}
+        Error layer:   {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    abs_path = os.path.abspath(path)
+    if not os.path.exists(abs_path):
+        return _error(f"file not found: {abs_path}")
+    if not os.path.isfile(abs_path):
+        return _error(f"not a regular file: {abs_path}")
+
+    cached = _cache.lookup_file(abs_path)
+    if cached is not None:
+        _log("file_cache_hit", path=abs_path)
+        entry = cached
+    else:
+        if is_binary_doc(abs_path):
+            try:
+                content = convert_to_markdown(abs_path)
+            except ConversionError as e:
+                return _error(f"document conversion failed: {e}")
+            chunks = chunk_document(content)
+            strategy = "document"
+            _log("converted", path=abs_path, n_chunks=len(chunks), md_chars=len(content))
+        else:
+            try:
+                with open(abs_path, "r", encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+            except OSError as e:
+                return _error(f"cannot read file: {e}")
+            strategy, chunks = chunk_file(abs_path, content)
+        try:
+            embeddings = _embed_chunks([c.content for c in chunks])
+        except EmbedderError as e:
+            return _error(f"embed server unreachable: {e}")
+        mtime = os.path.getmtime(abs_path)
+        entry_id = make_file_id(abs_path, mtime)
+        entry = CachedEntry(
+            entry_id=entry_id,
+            source="file",
+            label=abs_path,
+            chunks=chunks,
+            embeddings=embeddings,
+            fetch_time=mtime,
+        )
+        _cache.put(entry)
+        _log("file_cached", path=abs_path, entry_id=entry_id, n_chunks=len(chunks), strategy=strategy)
+
+    try:
+        query_vec = embed_one(query)
+    except EmbedderError as e:
+        return _error(f"embed server unreachable for query ranking: {e}")
+    scored = [(cosine_similarity(query_vec, entry.embeddings[i]), i)
+              for i in range(len(entry.chunks))]
+    scored.sort(reverse=True)
+    top = scored[:max(1, min(DEFAULT_TOP_K, len(scored)))]
+
+    if return_chunks:
+        results = []
+        for score, i in top:
+            c = entry.chunks[i]
+            results.append({
+                "chunk_id": c.chunk_id,
+                "score": round(score, 4),
+                "content": c.content,
+                "metadata": c.metadata,
+            })
+        return {"layer": "chunks", "query": query, "results": results, "can_escalate": False}
+
+    top_chunks = [
+        {"content": entry.chunks[i].content, "url_or_path": abs_path,
+         "title": os.path.basename(abs_path)}
+        for _, i in top
+    ]
+    result = summarize(query, top_chunks)
+    return result.to_dict(query)
+
+
+@mcp.tool()
+def get_skill(name: str) -> dict:
+    """Retrieve a skill's full instruction set by name.
+
+    Skills are on-demand instruction sets stored in the Library's skills/
+    directory. They are returned verbatim — no chunking, no embedding, no
+    summarization. The primary model applies the skill's instructions directly.
+
+    Available skills: annyvoice
+
+    Args:
+        name: Skill name without extension (e.g., "annyvoice").
+
+    Returns:
+        {"layer": "skill", "name": ..., "content": ...}
+        or {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    skill_path = SKILLS_DIR / f"{name}.md"
+    if not skill_path.exists():
+        available = [p.stem for p in SKILLS_DIR.glob("*.md")]
+        return _error(f"skill '{name}' not found. Available: {available}")
+    content = skill_path.read_text(encoding="utf-8")
+    _log("skill_returned", name=name, chars=len(content))
+    return {"layer": "skill", "name": name, "content": content}
+
+
+@mcp.tool()
+def context_usage(directory: str | None = None) -> dict:
+    """Report current context-window usage for the active opencode session.
+
+    Use this when the user asks "how much context have I used", before a long
+    operation that would consume significant context, or when deciding
+    whether to start a new session. Returns ground-truth numbers from
+    opencode's own session store — no estimation.
+
+    Resolution: prefers the most recent session whose working directory
+    matches `directory` (default: this server's cwd, which is usually the
+    agent's project root). If no session is found in that directory, falls
+    back to the most recently updated session anywhere on the calling user's
+    account. The `directory_match` field in the response signals which path
+    was taken, so the answer can be honest about scope.
+
+    Per-user by construction: an MCP server spawned by opencode runs as the
+    calling user's uid and reads ~/.local/share/opencode/opencode.db — so
+    levine and anny each see their own sessions, never each other's.
+
+    Args:
+        directory: Optional working-directory filter. Defaults to the
+                   server's cwd. Pass an explicit absolute path to inspect a
+                   different project's session.
+
+    Returns:
+        Context layer:
+            {"layer": "context",
+             "session_id": "ses_...",
+             "session_title": "Dev server startup",
+             "session_directory": "/path/to/project",
+             "directory_match": true,                  # false on fallback
+             "model": "providerID/modelID",
+             "context_limit": 65536,                   # tokens; null if unknown
+             "current_tokens": 33962,                  # last turn total input
+             "pct_used": 0.518,                        # null if limit unknown
+             "input": 213,                             # last turn fresh input
+             "output": 241,                            # last turn output
+             "reasoning": 0,
+             "cache_read": 33508,                      # cache reuse this turn
+             "cache_write": 0,
+             "turn_count": 47,                         # assistant turns total
+             "session_age_min": 12.4}
+        Error layer:  {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    state = get_active_session_state(directory)
+    if "error" in state:
+        return _error(state["error"])
+    return {"layer": "context", **state}
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+def main() -> None:
+    _log("library_start")
+    mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()
+"""Secondary inference for Library.
+
+Sends a question + list of text chunks to the secondary llama-server
+and returns a SummaryResult. If the server is offline, returns a
+low-confidence result so the caller can offer chunk escalation instead.
+"""
+from __future__ import annotations
+
+import json
+import re
+import urllib.request
+from dataclasses import dataclass
+
+
+LLAMA_URL = "http://127.0.0.1:11435/v1/chat/completions"
+LLAMA_MODEL = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+DISTILL_TIMEOUT_SEC = 45
+
+_SYSTEM_PROMPT = """\
+You are a research assistant. You will be given a user question and a numbered
+set of text chunks. Produce a concise answer grounded only in the chunks.
+
+Rules:
+- Never make confident claims the chunks don't support. If the chunks don't
+  cover the question, return confidence "low" and say so in notes.
+- Answer directly. No preamble.
+- Maximum ~400 tokens of summary.
+- Output ONLY valid JSON — no markdown fences, no surrounding prose:
+
+{
+  "summary": "<1-3 paragraphs>",
+  "sources": [{"url_or_path": "<url or path>", "title": "<title>", "used_for": "<brief phrase>"}],
+  "confidence": "high" | "medium" | "low",
+  "notes": "<optional one-line hedge or gap>"
+}
+"""
+
+
+@dataclass
+class SummaryResult:
+    summary: str
+    sources: list[dict]
+    confidence: str  # "high" | "medium" | "low"
+    notes: str
+
+    def to_dict(self, query: str) -> dict:
+        return {
+            "layer": "summary",
+            "query": query,
+            "summary": self.summary,
+            "sources": self.sources,
+            "confidence": self.confidence,
+            "notes": self.notes,
+            "can_escalate": True,
+        }
+
+
+def summarize(question: str, chunks: list[dict]) -> SummaryResult:
+    """Call secondary model with question + chunks. Returns SummaryResult.
+
+    chunks: list of {"content": str, "url_or_path": str, "title": str}
+
+    Gracefully degrades: if the server is unreachable, returns a low-confidence
+    result so the caller can offer chunk escalation instead.
+    """
+    bundle_lines: list[str] = []
+    for i, c in enumerate(chunks, 1):
+        label = f"{c.get('title', '')} ({c.get('url_or_path', '')})"
+        bundle_lines.append(f"[{i}] {label}:")
+        bundle_lines.append(c.get("content", ""))
+        bundle_lines.append("")
+
+    user_msg = (
+        f"Question: {question}\n\n"
+        f"Chunks:\n{''.join(bundle_lines)}\n\n"
+        "Return JSON only."
+    )
+
+    payload = {
+        "model": LLAMA_MODEL,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_msg},
+        ],
+        "max_tokens": 600,
+        "temperature": 0.2,
+        "stream": False,
+    }
+
+    fallback_sources = [
+        {"url_or_path": c.get("url_or_path", ""), "title": c.get("title", ""), "used_for": "not consulted"}
+        for c in chunks
+    ]
+
+    try:
+        req = urllib.request.Request(
+            LLAMA_URL,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=DISTILL_TIMEOUT_SEC) as r:
+            resp = json.loads(r.read())
+        raw = resp["choices"][0]["message"]["content"]
+    except Exception as e:
+        return SummaryResult(
+            summary="secondary model offline; request chunks for direct access",
+            sources=fallback_sources,
+            confidence="low",
+            notes=f"llama-server error: {e}",
+        )
+
+    return _parse_output(raw, fallback_sources)
+
+
+def _parse_output(raw: str, fallback_sources: list[dict]) -> SummaryResult:
+    cleaned = raw.strip()
+    m = re.search(r"\{[\s\S]*\}", cleaned)
+    if not m:
+        return SummaryResult("library: no parseable JSON from secondary model",
+                             fallback_sources, "low", "model output contained no JSON object")
+    try:
+        parsed = json.loads(m.group(0))
+    except json.JSONDecodeError as e:
+        return SummaryResult("library: JSON parse failed", fallback_sources, "low", str(e))
+
+    confidence = parsed.get("confidence")
+    if confidence not in ("high", "medium", "low"):
+        confidence = "low"
+
+    return SummaryResult(
+        summary=parsed.get("summary", "")[:4000],
+        sources=parsed.get("sources") or fallback_sources,
+        confidence=confidence,
+        notes=parsed.get("notes", ""),
+    )
+"""Unified DRAM LRU cache for Library.
+
+Holds CachedEntry objects for both local files and web pages.
+Keyed by entry_id; secondary lookup by label (path or URL).
+
+File entries: keyed by make_file_id(path, mtime). Stale on mtime change.
+Web entries:  keyed by make_web_id(url, fetch_time). Never auto-expire;
+              force_refresh bypasses cache at the tool level.
+"""
+from __future__ import annotations
+
+import hashlib
+import os
+import time
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+MAX_CACHED_ENTRIES = 40
+
+
+@dataclass
+class CachedEntry:
+    entry_id: str
+    source: str          # "file" | "web"
+    label: str           # absolute path or URL
+    chunks: list         # list[Chunk] for files; list[str] for web
+    embeddings: list     # list[list[float]], parallel to chunks
+    fetch_time: float
+    last_accessed: float = field(default_factory=time.time)
+
+
+def make_file_id(path: str, mtime: float) -> str:
+    h = hashlib.sha256(f"file|{path}|{mtime}".encode()).hexdigest()
+    return f"f_{h[:12]}"
+
+
+def make_web_id(url: str, fetch_time: float) -> str:
+    h = hashlib.sha256(f"web|{url}|{fetch_time}".encode()).hexdigest()
+    return f"w_{h[:12]}"
+
+
+class Cache:
+    def __init__(self, max_entries: int = MAX_CACHED_ENTRIES) -> None:
+        self._entries: OrderedDict[str, CachedEntry] = OrderedDict()
+        self._max = max_entries
+
+    def get(self, entry_id: str) -> Optional[CachedEntry]:
+        entry = self._entries.get(entry_id)
+        if entry is None:
+            return None
+        self._entries.move_to_end(entry_id)
+        entry.last_accessed = time.time()
+        return entry
+
+    def get_by_label(self, label: str) -> Optional[CachedEntry]:
+        for entry in reversed(list(self._entries.values())):
+            if entry.label == label:
+                self._entries.move_to_end(entry.entry_id)
+                entry.last_accessed = time.time()
+                return entry
+        return None
+
+    def put(self, entry: CachedEntry) -> None:
+        self._entries[entry.entry_id] = entry
+        self._entries.move_to_end(entry.entry_id)
+        while len(self._entries) > self._max:
+            self._entries.popitem(last=False)
+
+    def release(self, entry_id: str) -> bool:
+        return self._entries.pop(entry_id, None) is not None
+
+    def lookup_file(self, path: str) -> Optional[CachedEntry]:
+        abs_path = os.path.abspath(path)
+        try:
+            mtime = os.path.getmtime(abs_path)
+        except OSError:
+            return None
+        expected_id = make_file_id(abs_path, mtime)
+        return self.get(expected_id)
+
+    def stats(self) -> dict:
+        return {
+            "cached_entries": len(self._entries),
+            "max_entries": self._max,
+            "entry_ids": list(self._entries.keys()),
+        }
+"""HTTP client for the llama-embed server on :11437.
+
+Uses the OpenAI-compatible /v1/embeddings endpoint. Batches sent as a single
+request to leverage llama-server's internal batching.
+
+No retry here — retry policy lives at the caller level (the server.py tool).
+"""
+
+from __future__ import annotations
+
+import json
+import urllib.error
+import urllib.request
+
+
+EMBED_URL = "http://127.0.0.1:11437/v1/embeddings"
+EMBED_MODEL = "multilingual-e5-large"
+REQUEST_TIMEOUT_SEC = 30
+
+# multilingual-e5-large is 512-token context (XLM-RoBERTa base); llama-server
+# rejects inputs that exceed the configured context (-c 512). We defensively
+# cap the character count per input so even token-dense content (worst case
+# 1 char per token) cannot overflow. Same 1024-dim output as mxbai — drop-in
+# replacement at the protocol level. Adds Hebrew + 90+ other languages while
+# preserving English retrieval quality within a few percent of mxbai.
+MAX_CHARS_PER_INPUT = 500
+
+
+class EmbedderError(RuntimeError):
+    pass
+
+
+def embed_batch(texts: list[str]) -> list[list[float]]:
+    """Embed a batch of texts. Returns a list of vectors in the same order.
+
+    Raises EmbedderError on HTTP or parsing failure. No partial results —
+    either every text gets a vector, or the call raises.
+
+    Inputs longer than MAX_CHARS_PER_INPUT are truncated defensively to
+    prevent the embed server from 500-ing on over-budget text. Chunkers
+    should stay under this limit; truncation here is a safety net.
+    """
+    if not texts:
+        return []
+
+    safe_texts = [t[:MAX_CHARS_PER_INPUT] for t in texts]
+    payload = json.dumps({"model": EMBED_MODEL, "input": safe_texts}).encode("utf-8")
+    req = urllib.request.Request(
+        EMBED_URL,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SEC) as resp:
+            body = resp.read()
+    except urllib.error.HTTPError as e:
+        raise EmbedderError(f"embed HTTP {e.code}: {e.read().decode(errors='replace')[:200]}") from e
+    except urllib.error.URLError as e:
+        raise EmbedderError(f"embed unreachable at {EMBED_URL}: {e.reason}") from e
+    except TimeoutError as e:
+        raise EmbedderError(f"embed timeout after {REQUEST_TIMEOUT_SEC}s") from e
+
+    try:
+        resp_json = json.loads(body)
+    except json.JSONDecodeError as e:
+        raise EmbedderError(f"embed returned invalid JSON: {e}") from e
+
+    data = resp_json.get("data")
+    if not isinstance(data, list) or len(data) != len(texts):
+        raise EmbedderError(
+            f"embed returned {len(data) if isinstance(data, list) else 'non-list'} "
+            f"vectors for {len(texts)} inputs"
+        )
+
+    vectors: list[list[float]] = []
+    for item in data:
+        emb = item.get("embedding")
+        if not isinstance(emb, list):
+            raise EmbedderError("embed response item missing 'embedding'")
+        vectors.append(emb)
+    return vectors
+
+
+def embed_one(text: str) -> list[float]:
+    """Embed a single query. Convenience wrapper."""
+    return embed_batch([text])[0]
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Cosine similarity between two vectors. Used for ranking chunks against a query."""
+    dot = sum(x * y for x, y in zip(a, b))
+    na = sum(x * x for x in a) ** 0.5
+    nb = sum(x * x for x in b) ** 0.5
+    if na == 0 or nb == 0:
+        return 0.0
+    return dot / (na * nb)
+"""Chunking strategies for Librarian.
+
+Two chunkers keyed on file extension. The strategy is chosen by extension at
+dispatch time, not configured per-call.
+
+- document: markdown / prose. Splits on header boundaries (# / ## / ###),
+  with section-path metadata. Target ~500 tokens but respects header boundaries
+  rather than hard-splitting.
+- code: source files, config, markup. Fixed 500-token windows with 50-token
+  overlap. No structural awareness; borrowed from the v1 code-oriented chunker.
+
+The safety-net future work (auto-retry with alternate strategy + quality
+comparison) hooks the same dispatch function; only the post-processing wrapper
+changes.
+
+TODO (v1 rejects binary): add a binary-parser chunker (PDF, ipynb, etc.) that
+runs serialized against the text embedder (never concurrent) so VRAM doesn't
+grow.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Iterator
+
+
+# ── Dispatch ─────────────────────────────────────────────────────────────────
+
+# Strategy lookup by file extension. Unknown extensions default to "code" —
+# fixed-window chunking is the safe generalist; document chunking fails
+# badly on files with no section structure.
+CHUNKER_BY_EXT: dict[str, str] = {
+    # Document / prose
+    ".md": "document",
+    ".markdown": "document",
+    ".txt": "document",
+    ".rst": "document",
+    ".org": "document",
+    # Source
+    ".py": "code",
+    ".js": "code",
+    ".mjs": "code",
+    ".ts": "code",
+    ".tsx": "code",
+    ".jsx": "code",
+    ".go": "code",
+    ".rs": "code",
+    ".c": "code",
+    ".h": "code",
+    ".cpp": "code",
+    ".hpp": "code",
+    ".cc": "code",
+    ".cs": "code",
+    ".java": "code",
+    ".kt": "code",
+    ".rb": "code",
+    ".php": "code",
+    ".swift": "code",
+    ".scala": "code",
+    ".lua": "code",
+    ".pl": "code",
+    ".pm": "code",
+    ".sh": "code",
+    ".bash": "code",
+    ".zsh": "code",
+    ".fish": "code",
+    # Config / data
+    ".yml": "code",
+    ".yaml": "code",
+    ".toml": "code",
+    ".json": "code",
+    ".xml": "code",
+    ".ini": "code",
+    ".conf": "code",
+    ".cfg": "code",
+    ".env": "code",
+    # Markup (treat as code; headers aren't markdown-style)
+    ".html": "code",
+    ".htm": "code",
+    ".css": "code",
+    ".scss": "code",
+    ".sass": "code",
+    ".less": "code",
+    ".sql": "code",
+    ".tex": "code",
+    # Dockerfiles, makefiles: extension-less but the server checks names too
+}
+
+# File basenames that imply "code" when extension is missing/generic.
+CODE_BASENAMES: set[str] = {
+    "dockerfile",
+    "makefile",
+    "gnumakefile",
+    "rakefile",
+    "gemfile",
+    "procfile",
+    "caddyfile",
+    "jenkinsfile",
+    "vagrantfile",
+}
+
+
+def choose_strategy(path: str) -> str:
+    """Return 'document' or 'code' based on the file's extension/basename."""
+    p = Path(path)
+    ext = p.suffix.lower()
+    if ext in CHUNKER_BY_EXT:
+        return CHUNKER_BY_EXT[ext]
+    if p.name.lower() in CODE_BASENAMES:
+        return "code"
+    # Unknown → safe generalist
+    return "code"
+
+
+# ── Chunk dataclass ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class Chunk:
+    chunk_id: int
+    content: str
+    byte_range: tuple[int, int]  # [start, end) in the source file
+    metadata: dict[str, str | int]  # strategy-specific
+
+
+# ── Token estimation (approximate, no tokenizer dep) ─────────────────────────
+
+# mxbai-embed-large has a 512-token context hard limit. We size chunks to never
+# overflow it even for token-dense content.
+#
+# Empirical: a 560-char Python chunk tokenized to 560 tokens (mxbai's tokenizer
+# effectively allocates ~1 token per character for code with short identifiers,
+# operators, and whitespace). So for the worst case we must assume 1 char = 1
+# token. That gives a hard char ceiling of 500.
+#
+# For prose (~4 chars/token), 500 chars is under-sized, but that's okay — the
+# retriever will just produce more, smaller chunks, each still semantically
+# coherent at the section level.
+#
+# TARGET_CHARS is the chunk-aim; MAX_CHARS is the hard limit we never cross.
+TARGET_CHARS = 400
+MAX_CHARS = 500
+OVERLAP_CHARS = 50
+
+
+# ── Document chunker (markdown / prose) ──────────────────────────────────────
+
+
+_HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
+
+
+def chunk_document(content: str) -> list[Chunk]:
+    """Chunk markdown-style prose on header boundaries.
+
+    Strategy: split on ATX headers (`# H1`, `## H2`, etc.). Track section path
+    as we descend the header hierarchy. If a section body exceeds TARGET_CHARS,
+    sub-split it into overlapping windows while preserving the section path.
+
+    For files with no headers, falls back to a single-document paragraph-based
+    split.
+    """
+    chunks: list[Chunk] = []
+    chunk_id = 0
+
+    # Collect header positions
+    headers = []
+    for m in _HEADER_RE.finditer(content):
+        headers.append((m.start(), m.end(), len(m.group(1)), m.group(2).strip()))
+
+    if not headers:
+        # No structure → fall back to fixed-window splitting with paragraph
+        # awareness (prefer splitting at double-newline boundaries when possible)
+        return _chunk_fixed_windows(content, metadata_for_code=False)
+
+    # Build sections: [(start, end, depth, title)]
+    sections: list[tuple[int, int, int, str]] = []
+    for i, (hstart, hend, depth, title) in enumerate(headers):
+        section_end = headers[i + 1][0] if i + 1 < len(headers) else len(content)
+        sections.append((hstart, section_end, depth, title))
+
+    # Track the current section-path stack
+    section_stack: list[tuple[int, str]] = []  # (depth, title)
+
+    for sec_start, sec_end, depth, title in sections:
+        # Pop deeper-or-equal levels so this header replaces them
+        while section_stack and section_stack[-1][0] >= depth:
+            section_stack.pop()
+        section_stack.append((depth, title))
+        section_path = " > ".join(t for _, t in section_stack)
+
+        body = content[sec_start:sec_end]
+
+        # If the section fits the target, one chunk. Otherwise sub-split.
+        # (We cap at TARGET_CHARS, not MAX_CHARS, so we always have overlap
+        # headroom. MAX_CHARS is a never-exceed safety net if someone tweaks
+        # the chunker logic in the future.)
+        if len(body) <= TARGET_CHARS:
+            chunks.append(
+                Chunk(
+                    chunk_id=chunk_id,
+                    content=body,
+                    byte_range=(sec_start, sec_end),
+                    metadata={"section_path": section_path, "heading": title},
+                )
+            )
+            chunk_id += 1
+        else:
+            # Sub-split oversized section with overlap
+            sub_start = 0
+            while sub_start < len(body):
+                sub_end = min(sub_start + TARGET_CHARS, len(body))
+                # Prefer splitting on a paragraph break if there's one nearby
+                if sub_end < len(body):
+                    window = body[sub_start:sub_end]
+                    last_break = window.rfind("\n\n")
+                    if last_break > TARGET_CHARS // 2:
+                        sub_end = sub_start + last_break + 2
+                chunks.append(
+                    Chunk(
+                        chunk_id=chunk_id,
+                        content=body[sub_start:sub_end],
+                        byte_range=(sec_start + sub_start, sec_start + sub_end),
+                        metadata={
+                            "section_path": section_path,
+                            "heading": title,
+                            "window": "partial",
+                        },
+                    )
+                )
+                chunk_id += 1
+                if sub_end == len(body):
+                    break
+                sub_start = sub_end - OVERLAP_CHARS
+
+    return chunks
+
+
+# ── Code chunker (fixed-window with overlap) ─────────────────────────────────
+
+
+def chunk_code(content: str) -> list[Chunk]:
+    """Chunk source files into fixed 500-token windows with 50-token overlap.
+
+    No structural awareness. Metadata: byte_range and line_range.
+    Borrowed (in spirit) from the v1 code-oriented chunker.
+    """
+    return _chunk_fixed_windows(content, metadata_for_code=True)
+
+
+def _chunk_fixed_windows(content: str, *, metadata_for_code: bool) -> list[Chunk]:
+    if not content:
+        return []
+    chunks: list[Chunk] = []
+    chunk_id = 0
+    pos = 0
+    length = len(content)
+    # Pre-compute line starts for line_range calculation (code case)
+    line_starts: list[int] = []
+    if metadata_for_code:
+        line_starts.append(0)
+        for i, ch in enumerate(content):
+            if ch == "\n":
+                line_starts.append(i + 1)
+
+    while pos < length:
+        end = min(pos + TARGET_CHARS, length)
+        # Try to end on a line boundary for code readability
+        if metadata_for_code and end < length:
+            next_nl = content.rfind("\n", pos, end)
+            if next_nl > pos + TARGET_CHARS // 2:
+                end = next_nl + 1
+        chunk_content = content[pos:end]
+        metadata: dict[str, str | int] = {}
+        if metadata_for_code:
+            # Compute line range (1-based, inclusive-end)
+            start_line = _line_for_offset(line_starts, pos)
+            end_line = _line_for_offset(line_starts, end - 1)
+            metadata["line_range"] = f"{start_line}-{end_line}"
+        chunks.append(
+            Chunk(
+                chunk_id=chunk_id,
+                content=chunk_content,
+                byte_range=(pos, end),
+                metadata=metadata,
+            )
+        )
+        chunk_id += 1
+        if end == length:
+            break
+        pos = end - OVERLAP_CHARS
+    return chunks
+
+
+def _line_for_offset(line_starts: list[int], offset: int) -> int:
+    """Binary-search for the 1-based line number containing the given byte offset."""
+    lo, hi = 0, len(line_starts) - 1
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if line_starts[mid] <= offset:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo + 1
+
+
+# ── Main dispatch ────────────────────────────────────────────────────────────
+
+
+def chunk(path: str, content: str) -> tuple[str, list[Chunk]]:
+    """Dispatch on path extension and return (strategy_name, chunks)."""
+    strategy = choose_strategy(path)
+    if strategy == "document":
+        return strategy, chunk_document(content)
+    return strategy, chunk_code(content)
+"""SearxNG search and result ranking for Library.
+
+query_variations()  — deterministic keyword + prose variants for a question
+search()            — run queries against SearxNG, return raw result pool
+rank_results()      — deduplicate, score, and pick top-N from the pool
+"""
+from __future__ import annotations
+
+import json
+import re
+import urllib.parse
+import urllib.request
+from typing import Any
+
+
+SEARXNG_URL = "http://127.0.0.1:8888"
+SEARCH_TIMEOUT_SEC = 15
+USER_AGENT = "library-mcp/0.1 (local research helper)"
+
+DOC_DOMAIN_BOOST = (
+    "proxmox.com", "immich.app", "debian.org", "ubuntu.com",
+    "kernel.org", "github.com", "docker.com", "traefik.io",
+    "grafana.com", "prometheus.io",
+)
+
+_STOPWORDS = frozenset((
+    "what", "which", "where", "when", "why", "how", "does", "do",
+    "is", "are", "was", "were", "the", "this", "that", "with",
+    "for", "from", "into", "about", "can", "should", "would",
+    "and", "but", "not", "you", "your", "there", "their",
+    "support", "supports",
+))
+
+
+def query_variations(question: str) -> list[str]:
+    q = question.strip()
+    words = re.findall(r"[\w-]+", q)
+    keywords = [w for w in words if w.lower() not in _STOPWORDS and len(w) >= 3]
+    variations: list[str] = []
+    if len(keywords) >= 2:
+        variations.append(" ".join(keywords[:8]))
+    variations.append(q)
+    seen: set[str] = set()
+    return [v for v in variations if not (v in seen or seen.add(v))]
+
+
+def search(question: str) -> list[dict[str, Any]]:
+    """Run all query variations and return the pooled result list."""
+    all_results: list[dict[str, Any]] = []
+    for q in query_variations(question):
+        url = f"{SEARXNG_URL}/search?{urllib.parse.urlencode({'q': q, 'format': 'json'})}"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+            with urllib.request.urlopen(req, timeout=SEARCH_TIMEOUT_SEC) as r:
+                data = json.loads(r.read())
+            for i, result in enumerate(data.get("results", [])[:10]):
+                result["_query_position"] = i
+                all_results.append(result)
+        except Exception:
+            pass
+    return all_results
+
+
+def rank_results(results: list[dict[str, Any]], question: str, max_n: int) -> list[dict[str, Any]]:
+    q_tokens = {w.lower() for w in re.findall(r"\w+", question) if len(w) >= 4}
+    seen_urls: set[str] = set()
+    scored: list[tuple[float, dict[str, Any]]] = []
+
+    for r in results:
+        url = r.get("url", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+
+        host = urllib.parse.urlparse(url).netloc.lower()
+        title = (r.get("title") or "").lower()
+        score = float(r.get("_query_position", 99))
+
+        if any(dom in host for dom in DOC_DOMAIN_BOOST):
+            score -= 5.0
+
+        t_tokens = {w for w in re.findall(r"\w+", title) if len(w) >= 4}
+        overlap = len(q_tokens & t_tokens)
+        score -= 2.0 * overlap
+        if overlap == 0 and not any(dom in host for dom in DOC_DOMAIN_BOOST):
+            score += 20.0
+
+        scored.append((score, r))
+
+    scored.sort(key=lambda x: x[0])
+    return [r for _, r in scored[:max_n]]
+"""Web fetch and text extraction for Library.
+
+Handles URL safety validation (SSRF defense), HTTP fetch with redirect
+re-checking, and readability-based text extraction. Returns plain text;
+callers handle chunking and embedding.
+"""
+from __future__ import annotations
+
+import ipaddress
+import re
+import socket
+import urllib.error
+import urllib.parse
+import urllib.request
+
+from readability import Document
+from bs4 import BeautifulSoup
+
+
+FETCH_TIMEOUT_SEC = 10
+USER_AGENT = "library-mcp/0.1 (local research helper)"
+MAX_BYTES = 2_000_000  # 2 MB cap per page
+
+
+class FetchError(RuntimeError):
+    pass
+
+
+def is_safe_public_url(url: str) -> tuple[bool, str]:
+    """Return (ok, reason). Reject non-http(s), private/loopback, link-local."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        return False, f"bad scheme: {parsed.scheme!r}"
+    host = parsed.hostname
+    if not host:
+        return False, "no hostname"
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as e:
+        return False, f"dns failed: {e}"
+    for info in infos:
+        ip_str = info[4][0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue
+        if (ip.is_loopback or ip.is_private or ip.is_link_local
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
+            return False, f"non-public address {ip_str}"
+    return True, "ok"
+
+
+class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        ok, reason = is_safe_public_url(newurl)
+        if not ok:
+            raise urllib.error.URLError(f"unsafe redirect: {reason}")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_OPENER = urllib.request.build_opener(_SafeRedirectHandler())
+
+
+def fetch_and_extract(url: str) -> tuple[str, str]:
+    """Fetch url and return (title, plain_text). Raises FetchError on failure."""
+    ok, reason = is_safe_public_url(url)
+    if not ok:
+        raise FetchError(f"blocked: {reason}")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+        with _OPENER.open(req, timeout=FETCH_TIMEOUT_SEC) as r:
+            raw_bytes = r.read(MAX_BYTES)
+            ctype = r.headers.get("Content-Type", "")
+            charset = r.headers.get_content_charset() or "utf-8"
+    except urllib.error.URLError as e:
+        raise FetchError(f"fetch failed: {e}") from e
+
+    if "html" not in ctype and "text" not in ctype:
+        raise FetchError(f"non-text content-type: {ctype}")
+
+    raw_text = raw_bytes.decode(charset, errors="replace")
+    doc = Document(raw_text)
+    title = doc.short_title() or url
+    html = doc.summary(html_partial=True)
+    text = BeautifulSoup(html, "lxml").get_text(" ", strip=True)
+    text = re.sub(r"\s+", " ", text).strip()
+    return title, text
+"""Read-only access to opencode's persisted session state.
+
+opencode keeps message-level state — including per-turn token counts — in a
+SQLite database at ``~/.local/share/opencode/opencode.db``. Each user has
+their own database; an MCP server spawned by opencode inherits the user's
+uid, so ``Path.home()`` resolves to the right place automatically.
+
+This module exposes one function — ``get_active_session_state`` — used by
+the ``context_usage`` MCP tool. It opens the DB read-only (WAL-mode
+concurrent reads are safe while opencode is writing) and returns a small
+dict the tool can wrap.
+
+Schema notes (opencode 1.14.x):
+  - ``session(id, directory, title, time_created, time_updated, ...)``
+  - ``message(id, session_id, time_created, time_updated, data)`` where
+    ``data`` is a JSON blob. Assistant messages carry
+    ``{role: "assistant", tokens: {total, input, output, reasoning,
+    cache: {write, read}}, modelID, providerID, ...}``.
+
+Tolerated failures (return ``{"error": ...}`` rather than raising):
+  - Database file missing (opencode never run on this user account)
+  - No session in this directory and no fallback session anywhere
+  - Most recent assistant turn has no token data (very fresh session)
+  - Model not declared in ``opencode.json`` (return tokens but null pct)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sqlite3
+from pathlib import Path
+from typing import Any
+
+DB_PATH = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+CONFIG_PATH = Path.home() / ".config" / "opencode" / "opencode.json"
+
+# How many recent messages to scan when looking for the latest turn with
+# token data. opencode emits user messages, assistant messages, and tool
+# parts; we only want assistant turns. 20 is generous — token data lives
+# on every assistant message, so usually message[0] is the answer.
+_RECENT_MESSAGE_SCAN = 20
+
+
+def _load_context_limits() -> dict[tuple[str, str], int]:
+    """Map (providerID, modelID) → context-window size from opencode config.
+
+    Returns an empty dict if the config file is missing or malformed; callers
+    should treat a missing limit as "unknown" rather than failing.
+    """
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+    out: dict[tuple[str, str], int] = {}
+    for provider_id, pdata in cfg.get("provider", {}).items():
+        if not isinstance(pdata, dict):
+            continue
+        for model_id, mdata in pdata.get("models", {}).items():
+            if not isinstance(mdata, dict):
+                continue
+            limit = mdata.get("limit", {}).get("context") if isinstance(mdata.get("limit"), dict) else None
+            if isinstance(limit, int) and limit > 0:
+                out[(provider_id, model_id)] = limit
+    return out
+
+
+def _parse_message_data(raw: Any) -> dict | None:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            d = json.loads(raw)
+            return d if isinstance(d, dict) else None
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+def get_active_session_state(directory: str | None = None) -> dict:
+    """Return token-usage state for the active opencode session.
+
+    Resolution: prefer the most recent session whose ``directory`` exactly
+    matches ``directory`` (defaults to ``os.getcwd()``). If none, fall back
+    to the most recently updated session anywhere on this user account.
+    The returned ``directory_match`` field signals which path was taken.
+
+    On any error, returns ``{"error": "<reason>"}``. Callers wrap this for
+    MCP transport.
+    """
+    if directory is None:
+        directory = os.getcwd()
+
+    if not DB_PATH.exists():
+        return {"error": f"opencode database not found at {DB_PATH}"}
+
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    except sqlite3.OperationalError as e:
+        return {"error": f"cannot open opencode database: {e}"}
+
+    try:
+        # Exact directory match first.
+        row = conn.execute(
+            "SELECT id, title, time_created, time_updated, directory "
+            "FROM session WHERE directory = ? "
+            "ORDER BY time_updated DESC LIMIT 1",
+            (directory,),
+        ).fetchone()
+        directory_match = row is not None
+
+        # Fall back to most recent session anywhere.
+        if row is None:
+            row = conn.execute(
+                "SELECT id, title, time_created, time_updated, directory "
+                "FROM session ORDER BY time_updated DESC LIMIT 1"
+            ).fetchone()
+        if row is None:
+            return {"error": "no opencode sessions found for this user"}
+
+        sid, title, t_created, t_updated, sess_dir = row
+
+        # Walk recent messages newest-first looking for an assistant turn
+        # with token data.
+        msg_rows = conn.execute(
+            "SELECT data FROM message WHERE session_id = ? "
+            "ORDER BY time_created DESC LIMIT ?",
+            (sid, _RECENT_MESSAGE_SCAN),
+        ).fetchall()
+
+        last_turn: dict | None = None
+        for (raw,) in msg_rows:
+            d = _parse_message_data(raw)
+            if d is None:
+                continue
+            if d.get("role") != "assistant":
+                continue
+            tokens = d.get("tokens")
+            if not isinstance(tokens, dict):
+                continue
+            # Skip in-flight placeholder messages: opencode creates an
+            # assistant row at request time with all-zero token fields and
+            # no `total` key, then updates it on completion. The placeholder
+            # is the *most recent* row when a tool call is in-flight (e.g.
+            # the call this tool is responding to), so picking it would
+            # always report 0. The completed message has both `total` and
+            # the `finish` field.
+            if "total" not in tokens:
+                continue
+            last_turn = d
+            break
+
+        if last_turn is None:
+            return {
+                "error": (
+                    f"no assistant turn with token data in last "
+                    f"{_RECENT_MESSAGE_SCAN} messages of session {sid}"
+                )
+            }
+
+        # Total assistant turn count. SQL LIKE on a JSON blob is hacky but
+        # cheap and good enough — this number is informational, not load-bearing.
+        turn_count = conn.execute(
+            "SELECT COUNT(*) FROM message WHERE session_id = ? "
+            "AND data LIKE '%\"role\":\"assistant\"%'",
+            (sid,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    tokens = last_turn["tokens"]
+    cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
+    provider_id = last_turn.get("providerID", "unknown")
+    model_id = last_turn.get("modelID", "unknown")
+
+    limits = _load_context_limits()
+    ctx_limit = limits.get((provider_id, model_id))
+    current_total = tokens.get("total", 0) if isinstance(tokens.get("total"), int) else 0
+    pct_used = round(current_total / ctx_limit, 4) if ctx_limit and current_total else None
+
+    # opencode timestamps are millis since epoch.
+    age_ms = max(0, int(t_updated) - int(t_created))
+
+    return {
+        "session_id": sid,
+        "session_title": title,
+        "session_directory": sess_dir,
+        "directory_match": directory_match,
+        "model": f"{provider_id}/{model_id}",
+        "context_limit": ctx_limit,
+        "current_tokens": current_total,
+        "pct_used": pct_used,
+        "input": tokens.get("input", 0),
+        "output": tokens.get("output", 0),
+        "reasoning": tokens.get("reasoning", 0),
+        "cache_read": cache.get("read", 0),
+        "cache_write": cache.get("write", 0),
+        "turn_count": int(turn_count or 0),
+        "session_age_min": round(age_ms / 60000, 1),
+    }

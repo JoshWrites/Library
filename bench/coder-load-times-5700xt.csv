@@ -1,0 +1,10 @@
+model,run,load_ms,first_token_ms,tokens_generated,tok_per_sec,exit_status
+qwen2.5-coder-1.5b,1,1042,476,64,134.2,ok
+qwen2.5-coder-1.5b,2,1019,406,64,157.41,ok
+qwen2.5-coder-1.5b,3,1017,404,64,158.05,ok
+qwen2.5-coder-3b,1,1524,644,64,99.33,ok
+qwen2.5-coder-3b,2,1524,644,64,99.23,ok
+qwen2.5-coder-3b,3,1522,644,64,99.23,ok
+qwen2.5-coder-7b,1,2619,1114,64,57.43,ok
+qwen2.5-coder-7b,2,2614,1114,64,57.43,ok
+qwen2.5-coder-7b,3,2620,1115,64,57.36,ok
