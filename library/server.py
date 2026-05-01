@@ -397,6 +397,121 @@ def _resolve_skill(name: str) -> tuple[Path, Path] | None:
     return None
 
 
+def _approx_tokens(text: str) -> int:
+    """Approximate token count using the chars/4 heuristic.
+
+    Rounded to the nearest 50 so the agent does not present false
+    precision to the user. Within ~10-15% of GLM/cl100k-style
+    tokenizers for typical English/markdown skill content -- accurate
+    enough for a "is this 800 or 8000 tokens" budgeting decision,
+    which is the only thing the user is being asked to judge.
+    """
+    if not text:
+        return 0
+    raw = max(1, len(text) // 4)
+    rounded = int(round(raw / 50.0)) * 50
+    return max(50, rounded)
+
+
+def _parse_skill_metadata(content: str) -> tuple[str | None, str]:
+    """Extract (description, body) from a skill file's content.
+
+    Recognizes Anthropic Skills YAML frontmatter (--- ... --- block at
+    the top of the file with a `description:` field). Falls back to
+    the first non-empty line of the body if no frontmatter is present.
+    Returns (None, content) when nothing usable is found, so the caller
+    can decide what to surface.
+
+    The body returned is the content with the frontmatter stripped --
+    used for token-counting "what the agent will actually see if it
+    loads this skill" rather than including the YAML header.
+    """
+    if not content.startswith("---"):
+        return None, content
+
+    # Find the closing fence. SKILL.md frontmatter is small; cap the
+    # search so a malformed file doesn't make us scan a megabyte.
+    end_idx = content.find("\n---", 3)
+    if end_idx == -1 or end_idx > 4096:
+        return None, content
+    fm_block = content[3:end_idx].strip()
+    body_start = end_idx + len("\n---")
+    if body_start < len(content) and content[body_start] == "\n":
+        body_start += 1
+    body = content[body_start:]
+
+    # Tiny YAML extractor: we only need `description:`. Avoids adding a
+    # dependency on PyYAML for one field. Multi-line descriptions
+    # using YAML folding ('>') or block ('|') aren't supported -- if
+    # we see one we'll just take the first line, which is fine for
+    # presenting a hint to the user.
+    description: str | None = None
+    for line in fm_block.splitlines():
+        if not line.startswith("description:"):
+            continue
+        raw = line[len("description:"):].strip()
+        if (raw.startswith('"') and raw.endswith('"')) or \
+           (raw.startswith("'") and raw.endswith("'")):
+            raw = raw[1:-1]
+        description = raw or None
+        break
+    return description, body
+
+
+# Helper-file extensions we surface in the inspect payload. Limited to
+# things a primary model could plausibly read into context if the SKILL
+# instructs it to. Binaries / images / archives skipped on purpose.
+_HELPER_EXTS: frozenset[str] = frozenset({
+    ".md", ".markdown", ".txt", ".rst",
+    ".py", ".sh", ".bash", ".zsh",
+    ".json", ".yaml", ".yml", ".toml",
+})
+
+
+def _enumerate_helpers(skill_dir: Path, main_file: Path) -> list[dict]:
+    """Walk skill_dir, collect helper files alongside main_file.
+
+    Recursive (skills like superpowers/brainstorming/ have scripts/ and
+    references/ subdirs). Excludes main_file itself. Returns a list of
+    {path, bytes, tokens_estimated} dicts where path is RELATIVE to
+    skill_dir for readability in the inspect payload. Sorted by path
+    for stable output.
+    """
+    main_abs = main_file.resolve()
+    helpers: list[dict] = []
+    if not skill_dir.is_dir():
+        return helpers
+    try:
+        for p in skill_dir.rglob("*"):
+            if not p.is_file():
+                continue
+            if p.resolve() == main_abs:
+                continue
+            if p.suffix.lower() not in _HELPER_EXTS:
+                continue
+            try:
+                size = p.stat().st_size
+                # Read for token estimate; cheap on the small text
+                # files we care about. Bail on binaries we wrongly
+                # flagged.
+                text = p.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            try:
+                rel = str(p.relative_to(skill_dir))
+            except ValueError:
+                rel = str(p)
+            helpers.append({
+                "path": rel,
+                "bytes": size,
+                "tokens_estimated": _approx_tokens(text),
+            })
+    except OSError:
+        pass
+    helpers.sort(key=lambda h: h["path"])
+    return helpers
+
+
 def _list_available_skills() -> list[str]:
     """Return the deduped list of skill names visible across SKILL_DIRS.
 
@@ -433,60 +548,123 @@ def _list_available_skills() -> list[str]:
 
 
 @mcp.tool()
-def get_skill(name: str) -> dict:
-    """Retrieve a skill's full instruction set by name.
+def get_skill(name: str, load: bool = False) -> dict:
+    """Retrieve a skill's metadata, or load its full content into context.
 
-    Skills are on-demand instruction sets returned verbatim - no
-    chunking, no embedding, no summarization. The primary model applies
-    the skill's instructions directly.
+    This tool has two modes, separated by the `load` parameter, so the
+    user can decide whether a skill is worth its context cost before
+    any of its content reaches the primary model.
 
-    The Library searches a list of directories on each call. By default
-    only the Library's bundled skills/ directory is searched. Users can
-    add their own directories via the WS_SKILLS_DIRS environment
-    variable (colon-separated path list, like PATH) -- typically set
-    in ~/.config/workstation/user.env and propagated by
-    opencode-session.sh. User directories take precedence over the
-    bundled directory on name collision (first match wins).
+    Mode 1 -- inspect (load=False, default).
+        Returns the skill's name, directory, description (parsed from
+        Anthropic Skills YAML frontmatter when present), an approximate
+        token count for SKILL.md itself, and a list of helper files
+        with their sizes and approximate token counts. The skill's
+        content is NOT included. Use this to decide whether the skill
+        is worth loading.
 
-    Two on-disk formats are supported. Within each searched directory:
-      - Flat:   <dir>/<name>.md
-      - Nested: <dir>/<name>/SKILL.md (Anthropic Skills convention,
-                may have helper files alongside)
+    Mode 2 -- load (load=True).
+        Returns the skill's full main-file content verbatim, ready to
+        apply. Helper files are still not included; if the skill's
+        instructions reference one, read it explicitly via the `read`
+        tool using the absolute path under "directory".
 
-    Listing a missing skill aggregates names across all searched
-    directories in both formats, deduped quietly.
+    Required workflow when you decide a skill applies:
 
-    Call with a name you expect to exist or with a placeholder; on miss
-    the response lists what is available.
+      1. Call get_skill(name) -- inspect only.
+      2. Tell the user: "I want to use the `<name>` skill (~N tokens) to
+         <reason tied to the user's task>. Description: <one line>. OK?"
+      3. Wait for explicit user approval.
+      4. Only then call get_skill(name, load=True).
+
+    Skipping the inspect step skips the user's choice -- never do that.
+    The user is the one who sees the tradeoff between the skill's value
+    and the context-window penalty; you do not have enough information
+    to decide unilaterally.
+
+    Skill discovery:
+        The Library searches the directories in WS_SKILLS_DIRS (colon-
+        separated path list set in ~/.config/workstation/user.env), in
+        order, then falls back to the Library's bundled skills/. User
+        dirs shadow the bundled dir on name collision. Two on-disk
+        formats are supported: flat <dir>/<name>.md and nested
+        <dir>/<name>/SKILL.md (Anthropic Skills convention).
+
+        Call with a name that does not exist (or a placeholder) to get
+        an aggregated listing of available skills.
 
     Args:
-        name: Skill name (e.g., "voice-rewrite" or "brainstorming"). No
-              extension; no path. Just the skill's identifier.
+        name: Skill identifier (e.g., "voice-rewrite", "brainstorming").
+              No extension; no path.
+        load: If False (default), return inspect metadata only -- the
+              skill's content does NOT enter your context. If True,
+              return the full main-file content. Default False is the
+              load-bearing safety: it forces you to surface the cost
+              to the user before paying it.
 
-    Returns:
-        {"layer": "skill", "name": ..., "content": ..., "source": ...,
-         "directory": ...} -- "directory" is the skill's own directory
-                              when the nested format was used, or the
-                              parent directory for the flat format.
-                              Helper files referenced by SKILL.md (e.g.
-                              scripts/, references/) live under
-                              "directory" and can be read with `read`
-                              if the skill instructs you to.
-        {"layer": "error",  "error": ..., "can_escalate": false}
+    Returns (load=False -- inspect):
+        {"layer":      "skill_inspect",
+         "name":       "...",
+         "directory":  "/abs/path/to/skill_dir",
+         "format":     "flat" | "nested",
+         "description": "..." | null,    # from frontmatter or null
+         "main_file":  {"path": "...", "bytes": N, "tokens_estimated": N},
+         "helpers":    [{"path": "rel/...", "bytes": N, "tokens_estimated": N}, ...],
+         "tokens_estimated": N}          # main_file tokens, for the headline ask
+
+    Returns (load=True -- content):
+        {"layer":     "skill",
+         "name":      "...",
+         "content":   "...",             # SKILL.md verbatim
+         "source":    "/abs/path/to/skill_file",
+         "directory": "/abs/path/to/skill_dir"}
+
+    Returns (miss / error):
+        {"layer": "error", "error": "...", "can_escalate": false}
     """
     found = _resolve_skill(name)
     if found is None:
         available = _list_available_skills()
         return _error(f"skill '{name}' not found. Available: {available}")
     skill_path, skill_dir = found
-    content = skill_path.read_text(encoding="utf-8")
-    _log("skill_returned", name=name, chars=len(content), path=str(skill_path))
+    fmt = "nested" if skill_path.name == "SKILL.md" else "flat"
+
+    try:
+        raw = skill_path.read_text(encoding="utf-8")
+    except OSError as e:
+        return _error(f"cannot read skill '{name}': {e}")
+
+    if load:
+        _log("skill_loaded", name=name, chars=len(raw), path=str(skill_path))
+        return {
+            "layer": "skill",
+            "name": name,
+            "content": raw,
+            "source": str(skill_path),
+            "directory": str(skill_dir),
+        }
+
+    description, body = _parse_skill_metadata(raw)
+    main_tokens = _approx_tokens(body)
+    main_rel = skill_path.name if fmt == "nested" else skill_path.name
+    helpers = _enumerate_helpers(skill_dir, skill_path) if fmt == "nested" else []
+    _log("skill_inspected",
+         name=name,
+         tokens_estimated=main_tokens,
+         helpers=len(helpers))
     return {
-        "layer": "skill",
+        "layer": "skill_inspect",
         "name": name,
-        "content": content,
-        "source": str(skill_path),
         "directory": str(skill_dir),
+        "format": fmt,
+        "description": description,
+        "main_file": {
+            "path": main_rel,
+            "bytes": skill_path.stat().st_size,
+            "tokens_estimated": main_tokens,
+        },
+        "helpers": helpers,
+        "tokens_estimated": main_tokens,
     }
 
 

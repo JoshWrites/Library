@@ -23,14 +23,22 @@ returns the top-ranked verbatim chunks. This protects primary-model
 context -- a 50-page PDF returns ~1-5 KB of distilled answer, not 30 KB
 of raw text.
 
-`get_skill` returns the full skill content as plain text -- skills are
-finalized instruction sets (e.g., voice-rewriting passes) that should land
-in primary context exactly as written. Skills are looked up across a list
-of directories: the Library's bundled `library/skills/` plus any
-directories the user lists in `WS_SKILLS_DIRS` (colon-separated, like
-`PATH`). User directories take precedence over the bundled set on name
-collision (first match wins). Listing a missing skill aggregates names
-across all directories, deduped quietly.
+`get_skill` is a two-step tool: by default (`load=False`) it returns
+metadata only -- description, an approximate token count, and the list
+of helper files alongside the skill -- so the agent can ask the user
+*"may I load skill X (~N tokens) for reason Y?"* before any of the
+skill's content reaches the primary context. On approval, the agent
+calls again with `load=True` to get the full skill content verbatim,
+ready to apply.
+
+Skills are looked up across a list of directories: the Library's
+bundled `library/skills/` plus any directories the user lists in
+`WS_SKILLS_DIRS` (colon-separated, like `PATH`). User directories take
+precedence over the bundled set on name collision (first match wins).
+Two on-disk formats are supported per directory: flat `<dir>/<name>.md`
+and the Anthropic Skills convention of `<dir>/<name>/SKILL.md` (with
+optional helper files alongside). Listing a missing skill aggregates
+names across all directories and both formats, deduped quietly.
 
 **Disk-write tools.** `convert` and `export` are different: they write the
 result to disk and return only metadata (path, byte count). The agent
