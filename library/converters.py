@@ -32,6 +32,25 @@ SUPPORTED_EXTS: frozenset[str] = frozenset({
     ".png", ".jpg", ".jpeg", ".tiff", ".tif",
 })
 
+# docling-serve OutputFormat values we expose. Keys are the user-facing
+# format names; values are the JSON keys docling returns the content under.
+OUTPUT_FORMATS: dict[str, str] = {
+    "md": "md_content",
+    "json": "json_content",
+    "html": "html_content",
+    "text": "text_content",
+    "doctags": "doctags_content",
+}
+
+# File extension to write for each output format.
+FORMAT_EXTENSIONS: dict[str, str] = {
+    "md": ".md",
+    "json": ".json",
+    "html": ".html",
+    "text": ".txt",
+    "doctags": ".doctags",
+}
+
 
 class ConversionError(RuntimeError):
     pass
@@ -49,6 +68,24 @@ def convert_to_markdown(path: str) -> str:
     HTTP error, malformed response). Caller decides how to surface the
     error to the MCP client.
     """
+    return convert_to_format(path, output_format="md")
+
+
+def convert_to_format(path: str, output_format: str = "md") -> str:
+    """POST file bytes to docling-serve, return converted content as a string.
+
+    Args:
+        path: Path to the binary document.
+        output_format: One of OUTPUT_FORMATS keys (md, json, html, text, doctags).
+
+    Raises ConversionError on any failure.
+    """
+    if output_format not in OUTPUT_FORMATS:
+        raise ConversionError(
+            f"unknown output_format {output_format!r}; "
+            f"expected one of {sorted(OUTPUT_FORMATS)}"
+        )
+
     abs_path = os.path.abspath(path)
     try:
         size = os.path.getsize(abs_path)
@@ -68,7 +105,7 @@ def convert_to_markdown(path: str) -> str:
     body, content_type = _build_multipart(
         filename=os.path.basename(abs_path),
         file_bytes=file_bytes,
-        fields={"to_formats": "md"},
+        fields={"to_formats": output_format},
     )
     req = urllib.request.Request(
         DOCLING_URL,
@@ -99,10 +136,82 @@ def convert_to_markdown(path: str) -> str:
         errors = parsed.get("errors") or "unknown"
         raise ConversionError(f"docling status={parsed.get('status')!r}: {errors}")
 
-    md = (parsed.get("document") or {}).get("md_content")
-    if not isinstance(md, str) or not md.strip():
-        raise ConversionError("docling response missing md_content")
-    return md
+    content_key = OUTPUT_FORMATS[output_format]
+    content = (parsed.get("document") or {}).get(content_key)
+    if content is None:
+        raise ConversionError(f"docling response missing {content_key}")
+    if not isinstance(content, str):
+        # json/yaml come back as nested objects in some configs; serialize.
+        content = json.dumps(content, indent=2)
+    if not content.strip():
+        raise ConversionError(f"docling returned empty {content_key}")
+    return content
+
+
+def convert_to_disk(
+    src_path: str,
+    dest_path: str | None = None,
+    output_format: str = "md",
+    overwrite: bool = False,
+) -> dict:
+    """Convert a binary document and write the result to disk.
+
+    Returns metadata only -- no file content. Designed so the caller's
+    primary-context footprint is the same regardless of source size.
+
+    Args:
+        src_path: Path to the binary document.
+        dest_path: Output path. If None, defaults to <src_dir>/<src_stem><ext>
+                   where <ext> matches output_format.
+        output_format: One of OUTPUT_FORMATS keys. Default "md".
+        overwrite: If False and dest exists, raise ConversionError.
+
+    Returns:
+        {"src_path", "dest_path", "output_format", "bytes"}
+
+    Raises ConversionError on any failure.
+    """
+    abs_src = os.path.abspath(src_path)
+    if not os.path.isfile(abs_src):
+        raise ConversionError(f"src_path is not a regular file: {abs_src}")
+
+    if output_format not in OUTPUT_FORMATS:
+        raise ConversionError(
+            f"unknown output_format {output_format!r}; "
+            f"expected one of {sorted(OUTPUT_FORMATS)}"
+        )
+
+    if dest_path is None:
+        stem = Path(abs_src).stem
+        ext = FORMAT_EXTENSIONS[output_format]
+        abs_dest = str(Path(abs_src).parent / f"{stem}{ext}")
+    else:
+        abs_dest = os.path.abspath(dest_path)
+
+    if os.path.exists(abs_dest) and not overwrite:
+        raise ConversionError(
+            f"dest_path exists: {abs_dest} (pass overwrite=True to replace)"
+        )
+    if abs_dest == abs_src:
+        raise ConversionError(f"dest_path equals src_path: {abs_src}")
+
+    parent = os.path.dirname(abs_dest)
+    if parent and not os.path.isdir(parent):
+        raise ConversionError(f"dest_path parent does not exist: {parent}")
+
+    content = convert_to_format(abs_src, output_format=output_format)
+    try:
+        with open(abs_dest, "w", encoding="utf-8") as f:
+            f.write(content)
+    except OSError as e:
+        raise ConversionError(f"cannot write {abs_dest}: {e}") from e
+
+    return {
+        "src_path": abs_src,
+        "dest_path": abs_dest,
+        "output_format": output_format,
+        "bytes": len(content.encode("utf-8")),
+    }
 
 
 def _build_multipart(
