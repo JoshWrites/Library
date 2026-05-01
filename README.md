@@ -6,26 +6,28 @@ Here's the thing: you want one tool that handles research, file mining, and skil
 
 ## What it does
 
-Six MCP tools, two return contracts:
+Five MCP tools, two return contracts:
 
 | Tool                    | Purpose                                       |
 |-------------------------|-----------------------------------------------|
 | `library_research`      | Web search -> fetch -> chunk -> embed -> rank -> summarize |
 | `library_read_file`     | Local file (or binary doc) -> chunk -> embed -> rank -> summarize |
-| `library_get_skill`     | Verbatim skill instruction set, no pipeline   |
 | `library_convert`       | Binary document -> text format on disk (docling sidecar) |
 | `library_export`        | Markdown (or other text) -> binary format on disk (pandoc) |
 | `library_context_usage` | Current opencode session token usage from the local DB |
+
+Skill loading is **not** a Library responsibility. opencode's native
+skill tool already discovers `~/.claude/skills` and `~/.agents/skills`
+on its own and gates each load through opencode's permission system
+(see `opencode-zed-patches/` in the umbrella repo for the patch that
+puts a meaningful description and token estimate on the permission
+card). Don't add a parallel skill loader here.
 
 **Summary tools.** `research` and `read_file` return a **summary** by default.
 If the summary is insufficient, the same call with `return_chunks=True`
 returns the top-ranked verbatim chunks. This protects primary-model
 context -- a 50-page PDF returns ~1-5 KB of distilled answer, not 30 KB
 of raw text.
-
-`get_skill` returns the full skill content as plain text -- skills are
-finalized instruction sets (e.g., voice-rewriting passes) that should land
-in primary context exactly as written.
 
 **Disk-write tools.** `convert` and `export` are different: they write the
 result to disk and return only metadata (path, byte count). The agent

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Library MCP server.
 
-Three tools:
+Five tools:
 
   research(question, max_sources, return_chunks, force_refresh)
     -> summary layer (default) or chunk layer (return_chunks=True)
@@ -11,10 +11,22 @@ Three tools:
     -> summary layer (default) or chunk layer (return_chunks=True)
     Local acquisition: read file -> chunk -> embed -> rank -> summarize
 
-  get_skill(name)
-    -> skill layer: full skill file contents, no pipeline
+  convert(src_path, dest_path, output_format, overwrite)
+    -> {src_path, dest_path, output_format, bytes}
+    Binary doc -> text format on disk via the docling-serve sidecar.
 
-Escalation protocol (primary carries round count):
+  export(src_path, dest_path, output_format, overwrite)
+    -> {src_path, dest_path, output_format, bytes}
+    Markdown -> binary format (docx/pdf/odt/etc.) on disk via pandoc.
+
+  context_usage(directory)
+    -> active opencode session token usage from the local SQLite store.
+
+Skill loading is handled by opencode's native skill tool, gated through
+opencode's permission system. Library does not expose a skill tool.
+
+Escalation protocol (primary carries round count) -- applies to research
+and read_file:
   - Call with return_chunks=False first (summary layer, can_escalate=True)
   - Call again with return_chunks=True if summary is insufficient (same round)
   - A new/refined query starts a new round (max 3 rounds per topic)
@@ -54,7 +66,6 @@ from .summarizer import summarize
 
 DEFAULT_MAX_SOURCES = 5
 DEFAULT_TOP_K = 5
-SKILLS_DIR = Path(__file__).parent / "skills"
 _EMBED_BATCH = 16
 
 
@@ -326,34 +337,6 @@ def read_file(
     ]
     result = summarize(query, top_chunks)
     return result.to_dict(query)
-
-
-@mcp.tool()
-def get_skill(name: str) -> dict:
-    """Retrieve a skill's full instruction set by name.
-
-    Skills are on-demand instruction sets stored in the Library's skills/
-    directory. They are returned verbatim - no chunking, no embedding, no
-    summarization. The primary model applies the skill's instructions directly.
-
-    Available skills depend on what files exist in the skills/ directory at
-    runtime; the directory is empty by default. Call with a name you expect
-    to exist or with a placeholder; on miss the response lists what is there.
-
-    Args:
-        name: Skill name without extension (e.g., "voice-rewrite").
-
-    Returns:
-        {"layer": "skill", "name": ..., "content": ...}
-        or {"layer": "error", "error": ..., "can_escalate": false}
-    """
-    skill_path = SKILLS_DIR / f"{name}.md"
-    if not skill_path.exists():
-        available = [p.stem for p in SKILLS_DIR.glob("*.md")]
-        return _error(f"skill '{name}' not found. Available: {available}")
-    content = skill_path.read_text(encoding="utf-8")
-    _log("skill_returned", name=name, chars=len(content))
-    return {"layer": "skill", "name": name, "content": content}
 
 
 @mcp.tool()
