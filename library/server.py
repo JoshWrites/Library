@@ -35,7 +35,14 @@ from mcp.server.fastmcp import FastMCP
 
 from .cache import Cache, CachedEntry, make_file_id, make_web_id
 from .chunkers import chunk as chunk_file, chunk_document
-from .converters import ConversionError, convert_to_markdown, is_supported as is_binary_doc
+from .converters import (
+    ConversionError,
+    OUTPUT_FORMATS as DOCLING_OUTPUT_FORMATS,
+    convert_to_disk,
+    convert_to_markdown,
+    is_supported as is_binary_doc,
+)
+from .exporters import EXPORT_FORMATS, ExportError, export_to_disk
 from .embedder import EmbedderError, cosine_similarity, embed_batch, embed_one
 from .fetcher import FetchError, fetch_and_extract
 from .opencode_state import get_active_session_state
@@ -347,6 +354,128 @@ def get_skill(name: str) -> dict:
     content = skill_path.read_text(encoding="utf-8")
     _log("skill_returned", name=name, chars=len(content))
     return {"layer": "skill", "name": name, "content": content}
+
+
+@mcp.tool()
+def convert(
+    src_path: str,
+    dest_path: str | None = None,
+    output_format: str = "md",
+    overwrite: bool = False,
+) -> dict:
+    """Convert a binary document to a text format on disk.
+
+    Use this when the user wants the *full* converted file (e.g. "convert
+    foo.docx to markdown" or "give me the markdown of this PDF"), as
+    opposed to read_file which returns a query-targeted summary or chunks.
+
+    The converted content is written to disk and NOT returned -- the
+    response is metadata only, so this tool's footprint on the primary
+    context is constant regardless of source size.
+
+    Backed by the docling-serve sidecar (default :5001). Supported source
+    extensions: .pdf .docx .pptx .xlsx .epub .html .htm .png .jpg .jpeg
+    .tiff .tif. 50 MB cap per document.
+
+    For the inverse direction (markdown to .docx/.pdf/.odt/etc.), use
+    the `export` tool.
+
+    Args:
+        src_path: Absolute or workspace-relative path to the source document.
+        dest_path: Where to write the result. If omitted, writes to
+                   <src_dir>/<src_stem><ext> where <ext> matches output_format
+                   (e.g. foo.docx -> foo.md).
+        output_format: One of: md, json, html, text, doctags. Default "md".
+        overwrite: If False (default) and dest_path exists, return an error
+                   instead of clobbering. Pass True only when the user has
+                   explicitly asked to replace the existing file.
+
+    Returns:
+        Success: {"layer": "converted", "src_path": ..., "dest_path": ...,
+                  "output_format": ..., "bytes": N}
+        Error:   {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    if not is_binary_doc(src_path):
+        return _error(
+            f"src_path extension not supported by docling-serve. "
+            f"For text->binary export use the `export` tool instead."
+        )
+    if output_format not in DOCLING_OUTPUT_FORMATS:
+        return _error(
+            f"unknown output_format {output_format!r}; "
+            f"expected one of {sorted(DOCLING_OUTPUT_FORMATS)}"
+        )
+    try:
+        result = convert_to_disk(
+            src_path=src_path,
+            dest_path=dest_path,
+            output_format=output_format,
+            overwrite=overwrite,
+        )
+    except ConversionError as e:
+        return _error(f"conversion failed: {e}")
+    _log("converted_to_disk",
+         src_path=result["src_path"],
+         dest_path=result["dest_path"],
+         output_format=output_format,
+         bytes=result["bytes"])
+    return {"layer": "converted", **result}
+
+
+@mcp.tool()
+def export(
+    src_path: str,
+    dest_path: str | None = None,
+    output_format: str = "docx",
+    overwrite: bool = False,
+) -> dict:
+    """Export a markdown (or other text) document to a binary format on disk.
+
+    Inverse of `convert`. Use this when the user wants to produce a .docx,
+    .pdf, .odt, .html, .epub, etc. from markdown they (or you) wrote.
+
+    The result is written to disk; the response is metadata only.
+
+    Backed by `pandoc` (system binary; install with `apt install pandoc`,
+    plus `texlive-xetex` if you want PDF output).
+
+    Source formats pandoc accepts: .md (default), .markdown, .rst, .html,
+    .htm, .tex, .org, .txt. Files with other extensions are read as
+    markdown.
+
+    Args:
+        src_path: Path to the source text document.
+        dest_path: Where to write the result. If omitted, writes to
+                   <src_dir>/<src_stem><ext> matching output_format.
+        output_format: One of: docx, odt, rtf, html, epub, pdf, latex.
+                       Default "docx".
+        overwrite: If False (default) and dest_path exists, return an error.
+
+    Returns:
+        Success: {"layer": "exported", "src_path": ..., "dest_path": ...,
+                  "output_format": ..., "bytes": N}
+        Error:   {"layer": "error", "error": ..., "can_escalate": false}
+    """
+    if output_format not in EXPORT_FORMATS:
+        return _error(
+            f"unknown output_format {output_format!r}; "
+            f"expected one of {sorted(EXPORT_FORMATS)}"
+        )
+    try:
+        result = export_to_disk(
+            src_path=src_path,
+            dest_path=dest_path,
+            output_format=output_format,
+            overwrite=overwrite,
+        )
+    except ExportError as e:
+        return _error(f"export failed: {e}")
+    _log("exported_to_disk",
+         src_path=result["src_path"],
+         dest_path=result["dest_path"],
+         output_format=output_format,
+         bytes=result["bytes"])
+    return {"layer": "exported", **result}
 
 
 @mcp.tool()
