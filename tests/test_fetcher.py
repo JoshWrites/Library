@@ -1,4 +1,4 @@
-"""Fetcher tests — no live network needed for SSRF and rejection tests."""
+"""Fetcher tests -- no live network needed for SSRF and rejection tests."""
 from __future__ import annotations
 
 import sys
@@ -39,6 +39,6 @@ def test_no_hostname_rejected():
 
 
 def test_public_url_accepted():
-    # example.com resolves to a public IP — safe to check without fetching
+    # example.com resolves to a public IP -- safe to check without fetching
     ok, reason = is_safe_public_url("https://example.com/page")
     assert ok, f"expected ok, got: {reason}"

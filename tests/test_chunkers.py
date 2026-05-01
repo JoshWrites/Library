@@ -1,4 +1,4 @@
-"""Strategy dispatch tests — no network, no embed server needed.
+"""Strategy dispatch tests -- no network, no embed server needed.
 
 Verifies that the chunker chooses the right strategy based on file extension
 and basename. This is the V1 "hardcoded dispatch" behavior; future auto-retry
@@ -39,7 +39,7 @@ def test_extensionless_basenames_route_to_code():
 
 
 def test_unknown_extension_falls_back_to_code():
-    # Truly unknown extension — defaults to code (safe generalist)
+    # Truly unknown extension -- defaults to code (safe generalist)
     assert choose_strategy("weird.xyzzy") == "code"
 
 
@@ -93,7 +93,7 @@ def test_code_chunker_handles_empty_file():
 
 
 def test_document_chunker_headerless_falls_back_to_windows():
-    # No headers → document chunker should still produce chunks
+    # No headers -> document chunker should still produce chunks
     text = "plain text with no headers.\n\n" * 200
     strategy, chunks = chunk("/tmp/plain.md", text)
     assert strategy == "document"

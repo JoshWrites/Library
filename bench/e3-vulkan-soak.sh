@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E3 — RDNA1 Vulkan stability soak (2 hours)
+# E3 -- RDNA1 Vulkan stability soak (2 hours)
 #
 # Question: are there crash-class bugs on Qwen2.5-Coder shapes when
 # co-resident with the existing sidecars on the 5700 XT?
@@ -10,12 +10,12 @@
 # in parallel with low-rate ingest-shaped embed calls (every 30s).
 #
 # Output:
-#   bench/e3-soak.log               — main run log
-#   bench/e3-server.log             — llama-server stderr
-#   bench/e3-edits.ndjson           — one line per edit-prediction request
-#   bench/e3-embeds.ndjson          — one line per embed request
-#   bench/e3-vram.csv               — VRAM samples every 60s
-#   bench/e3-summary.txt            — one-line verdict at the end
+#   bench/e3-soak.log               -- main run log
+#   bench/e3-server.log             -- llama-server stderr
+#   bench/e3-edits.ndjson           -- one line per edit-prediction request
+#   bench/e3-embeds.ndjson          -- one line per embed request
+#   bench/e3-vram.csv               -- VRAM samples every 60s
+#   bench/e3-summary.txt            -- one-line verdict at the end
 #
 # This script is designed to be launched in the background with
 # `nohup` or `run_in_background`. It cleans up the test llama-server

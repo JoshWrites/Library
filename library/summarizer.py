@@ -25,7 +25,7 @@ Rules:
   cover the question, return confidence "low" and say so in notes.
 - Answer directly. No preamble.
 - Maximum ~400 tokens of summary.
-- Output ONLY valid JSON — no markdown fences, no surrounding prose:
+- Output ONLY valid JSON -- no markdown fences, no surrounding prose:
 
 {
   "summary": "<1-3 paragraphs>",

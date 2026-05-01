@@ -1,4 +1,4 @@
-"""opencode_state unit tests — uses fixture SQLite DBs, no live opencode needed."""
+"""opencode_state unit tests -- uses fixture SQLite DBs, no live opencode needed."""
 from __future__ import annotations
 
 import json
@@ -111,7 +111,7 @@ def test_falls_back_to_most_recent_when_no_match(tmp_path, monkeypatch):
 def test_skips_placeholder_assistant_message(tmp_path, monkeypatch):
     """opencode writes a placeholder assistant row when a tool call is
     in-flight: tokens dict exists but has no `total` key, and input/output
-    are zero. We must skip it and use the previous completed turn — otherwise
+    are zero. We must skip it and use the previous completed turn -- otherwise
     every tool-triggered context_usage call reports 0."""
     db = tmp_path / "opencode.db"
     cfg = tmp_path / "opencode.json"

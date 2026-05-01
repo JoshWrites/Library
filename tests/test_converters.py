@@ -186,7 +186,7 @@ def test_e2e_real_docling_serve():
     """Convert a tiny synthesized DOCX through the real daemon.
 
     Skipped if docling-serve isn't reachable on :5001. We synthesize the
-    DOCX inline so the test is hermetic — no fixture file needed.
+    DOCX inline so the test is hermetic -- no fixture file needed.
     """
     if not _docling_up():
         print(f"  SKIP test_e2e_real_docling_serve: docling-serve not on :5001")

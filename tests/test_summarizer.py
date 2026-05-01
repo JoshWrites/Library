@@ -1,4 +1,4 @@
-"""Summarizer tests — validates offline contract and JSON parsing.
+"""Summarizer tests -- validates offline contract and JSON parsing.
 
 These tests do NOT require the secondary llama-server to be running.
 They test the parse/fallback path.

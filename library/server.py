@@ -4,15 +4,15 @@
 Three tools:
 
   research(question, max_sources, return_chunks, force_refresh)
-    → summary layer (default) or chunk layer (return_chunks=True)
-    Web acquisition: SearxNG search → fetch → chunk → embed → rank → summarize
+    -> summary layer (default) or chunk layer (return_chunks=True)
+    Web acquisition: SearxNG search -> fetch -> chunk -> embed -> rank -> summarize
 
   read_file(path, query, return_chunks)
-    → summary layer (default) or chunk layer (return_chunks=True)
-    Local acquisition: read file → chunk → embed → rank → summarize
+    -> summary layer (default) or chunk layer (return_chunks=True)
+    Local acquisition: read file -> chunk -> embed -> rank -> summarize
 
   get_skill(name)
-    → skill layer: full skill file contents, no pipeline
+    -> skill layer: full skill file contents, no pipeline
 
 Escalation protocol (primary carries round count):
   - Call with return_chunks=False first (summary layer, can_escalate=True)
@@ -90,19 +90,19 @@ def research(
     """Answer a research question from the web.
 
     Returns a summary by default. If the summary is insufficient, call again
-    with return_chunks=True to get the ranked raw chunks (same round — does
+    with return_chunks=True to get the ranked raw chunks (same round -- does
     not count toward the 3-round limit).
 
     Escalation protocol:
-      Round 1: research(question)                       → summary
-               research(question, return_chunks=True)   → chunks (same round)
-      Round 2: research(refined_question)               → summary
-      Round 3: research(further_refined_question)       → summary
+      Round 1: research(question)                       -> summary
+               research(question, return_chunks=True)   -> chunks (same round)
+      Round 2: research(refined_question)               -> summary
+      Round 3: research(further_refined_question)       -> summary
       After 3 rounds without sufficient result: fetch directly (last resort).
       A new topic always resets to round 1.
 
     force_refresh=True bypasses the cache and re-fetches all sources. Use
-    only when instructed by the user — the user is a more reliable judge of
+    only when instructed by the user -- the user is a more reliable judge of
     staleness than the primary model, which never sees the raw source.
 
     Args:
@@ -224,7 +224,7 @@ def read_file(
     with return_chunks=True to get ranked verbatim chunks (same round).
 
     Prefer this over the built-in read tool when understanding something
-    specific in a large file — it protects primary context by returning only
+    specific in a large file -- it protects primary context by returning only
     what is relevant. Use read when you need the file verbatim.
 
     Supported formats:
@@ -356,7 +356,7 @@ def context_usage(directory: str | None = None) -> dict:
     Use this when the user asks "how much context have I used", before a long
     operation that would consume significant context, or when deciding
     whether to start a new session. Returns ground-truth numbers from
-    opencode's own session store — no estimation.
+    opencode's own session store -- no estimation.
 
     Resolution: prefers the most recent session whose working directory
     matches `directory` (default: this server's cwd, which is usually the

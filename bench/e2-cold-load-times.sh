@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E2 — Cold-load timing for Qwen2.5-Coder GGUFs on the 5700 XT (Vulkan)
+# E2 -- Cold-load timing for Qwen2.5-Coder GGUFs on the 5700 XT (Vulkan)
 #
 # Question: how long does it take to load each Qwen2.5-Coder size from
 # page-cached GGUF into VRAM, including Vulkan shader compile? This sets
@@ -30,7 +30,7 @@ declare -A MODELS=(
   [qwen2.5-coder-7b]="/home/levine/models/qwen2.5-coder-7b/qwen2.5-coder-7b-instruct-q4_k_m.gguf"
 )
 
-# Stable iteration order (smallest → largest)
+# Stable iteration order (smallest -> largest)
 MODEL_ORDER=(qwen2.5-coder-1.5b qwen2.5-coder-3b qwen2.5-coder-7b)
 
 : > "$LOG"
@@ -47,7 +47,7 @@ restore_sidecars() {
     if systemctl is-active --quiet "$svc"; then
       log "  $svc: active"
     else
-      log "  $svc: NOT ACTIVE — manual intervention required"
+      log "  $svc: NOT ACTIVE -- manual intervention required"
     fi
   done
 }

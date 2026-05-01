@@ -28,7 +28,7 @@ from typing import Iterator
 
 # ── Dispatch ─────────────────────────────────────────────────────────────────
 
-# Strategy lookup by file extension. Unknown extensions default to "code" —
+# Strategy lookup by file extension. Unknown extensions default to "code" --
 # fixed-window chunking is the safe generalist; document chunking fails
 # badly on files with no section structure.
 CHUNKER_BY_EXT: dict[str, str] = {
@@ -110,7 +110,7 @@ def choose_strategy(path: str) -> str:
         return CHUNKER_BY_EXT[ext]
     if p.name.lower() in CODE_BASENAMES:
         return "code"
-    # Unknown → safe generalist
+    # Unknown -> safe generalist
     return "code"
 
 
@@ -135,7 +135,7 @@ class Chunk:
 # operators, and whitespace). So for the worst case we must assume 1 char = 1
 # token. That gives a hard char ceiling of 500.
 #
-# For prose (~4 chars/token), 500 chars is under-sized, but that's okay — the
+# For prose (~4 chars/token), 500 chars is under-sized, but that's okay -- the
 # retriever will just produce more, smaller chunks, each still semantically
 # coherent at the section level.
 #
@@ -170,7 +170,7 @@ def chunk_document(content: str) -> list[Chunk]:
         headers.append((m.start(), m.end(), len(m.group(1)), m.group(2).strip()))
 
     if not headers:
-        # No structure → fall back to fixed-window splitting with paragraph
+        # No structure -> fall back to fixed-window splitting with paragraph
         # awareness (prefer splitting at double-newline boundaries when possible)
         return _chunk_fixed_windows(content, metadata_for_code=False)
 

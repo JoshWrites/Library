@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# E1 — VRAM headroom audit for the 5700 XT (gfx1010, GPU0 in rocm-smi enumeration)
+# E1 -- VRAM headroom audit for the 5700 XT (gfx1010, GPU0 in rocm-smi enumeration)
 #
 # Question: how much VRAM is free on the 5700 XT with the two existing
 # sidecars (llama-secondary :11435, llama-embed :11437) warm and serving?

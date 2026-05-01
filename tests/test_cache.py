@@ -1,4 +1,4 @@
-"""Cache unit tests — no network, no embed server needed."""
+"""Cache unit tests -- no network, no embed server needed."""
 from __future__ import annotations
 import time
 from library.cache import Cache, make_file_id, make_web_id, CachedEntry
@@ -76,7 +76,7 @@ def test_lookup_file_misses_after_mtime_change():
         with open(path, "w") as f:
             f.write("changed")
         got = c.lookup_file(path)
-        assert got is None  # mtime changed → miss
+        assert got is None  # mtime changed -> miss
     finally:
         os.unlink(path)
 

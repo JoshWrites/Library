@@ -1,8 +1,8 @@
 """SearxNG search and result ranking for Library.
 
-query_variations()  — deterministic keyword + prose variants for a question
-search()            — run queries against SearxNG, return raw result pool
-rank_results()      — deduplicate, score, and pick top-N from the pool
+query_variations()  -- deterministic keyword + prose variants for a question
+search()            -- run queries against SearxNG, return raw result pool
+rank_results()      -- deduplicate, score, and pick top-N from the pool
 """
 from __future__ import annotations
 

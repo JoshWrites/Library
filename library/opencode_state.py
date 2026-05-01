@@ -1,11 +1,11 @@
 """Read-only access to opencode's persisted session state.
 
-opencode keeps message-level state — including per-turn token counts — in a
+opencode keeps message-level state -- including per-turn token counts -- in a
 SQLite database at ``~/.local/share/opencode/opencode.db``. Each user has
 their own database; an MCP server spawned by opencode inherits the user's
 uid, so ``Path.home()`` resolves to the right place automatically.
 
-This module exposes one function — ``get_active_session_state`` — used by
+This module exposes one function -- ``get_active_session_state`` -- used by
 the ``context_usage`` MCP tool. It opens the DB read-only (WAL-mode
 concurrent reads are safe while opencode is writing) and returns a small
 dict the tool can wrap.
@@ -37,13 +37,13 @@ CONFIG_PATH = Path.home() / ".config" / "opencode" / "opencode.json"
 
 # How many recent messages to scan when looking for the latest turn with
 # token data. opencode emits user messages, assistant messages, and tool
-# parts; we only want assistant turns. 20 is generous — token data lives
+# parts; we only want assistant turns. 20 is generous -- token data lives
 # on every assistant message, so usually message[0] is the answer.
 _RECENT_MESSAGE_SCAN = 20
 
 
 def _load_context_limits() -> dict[tuple[str, str], int]:
-    """Map (providerID, modelID) → context-window size from opencode config.
+    """Map (providerID, modelID) -> context-window size from opencode config.
 
     Returns an empty dict if the config file is missing or malformed; callers
     should treat a missing limit as "unknown" rather than failing.
@@ -161,7 +161,7 @@ def get_active_session_state(directory: str | None = None) -> dict:
             }
 
         # Total assistant turn count. SQL LIKE on a JSON blob is hacky but
-        # cheap and good enough — this number is informational, not load-bearing.
+        # cheap and good enough -- this number is informational, not load-bearing.
         turn_count = conn.execute(
             "SELECT COUNT(*) FROM message WHERE session_id = ? "
             "AND data LIKE '%\"role\":\"assistant\"%'",

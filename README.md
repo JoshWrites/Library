@@ -1,6 +1,6 @@
 # Library
 
-A local MCP server for opencode that unifies web research, file mining, and on-demand skill injection into one tool surface. It's designed for a homelab two-user, two-GPU workstation — the primary card stays loaded with the chat model, and all retrieval work happens on the secondary card or CPU.
+A local MCP server for opencode that unifies web research, file mining, and on-demand skill injection into one tool surface. It's designed for a homelab two-user, two-GPU workstation -- the primary card stays loaded with the chat model, and all retrieval work happens on the secondary card or CPU.
 
 Here's the thing: you want one tool that handles research, file mining, and skill injection all at once. That's what this does.
 
@@ -10,23 +10,23 @@ Four MCP tools, one return contract:
 
 | Tool                    | Purpose                                       |
 |-------------------------|-----------------------------------------------|
-| `library_research`      | Web search → fetch → chunk → embed → rank → summarize |
-| `library_read_file`     | Local file (or binary doc) → chunk → embed → rank → summarize |
+| `library_research`      | Web search -> fetch -> chunk -> embed -> rank -> summarize |
+| `library_read_file`     | Local file (or binary doc) -> chunk -> embed -> rank -> summarize |
 | `library_get_skill`     | Verbatim skill instruction set, no pipeline   |
 | `library_context_usage` | Current opencode session token usage from the local DB |
 
 `research` and `read_file` return a **summary** by default. If the summary is
 insufficient, the same call with `return_chunks=True` returns the top-ranked
-verbatim chunks. This protects primary-model context — a 50-page PDF returns
+verbatim chunks. This protects primary-model context -- a 50-page PDF returns
 ~1-5 KB of distilled answer, not 30 KB of raw text.
 
-`get_skill` returns the full skill content as plain text — skills are
+`get_skill` returns the full skill content as plain text -- skills are
 finalized instruction sets (e.g., voice-rewriting passes) that should land
 in primary context exactly as written.
 
 `context_usage` reads opencode's own SQLite session store and reports the
 active session's token total vs. the model's configured context limit. Use
-when the user asks "how much context have I used" — burns ~150 tokens
+when the user asks "how much context have I used" -- burns ~150 tokens
 instead of the ~1500-token guess the agent would otherwise produce. Per-user
 by construction: each user's MCP subprocess reads their own
 `~/.local/share/opencode/opencode.db`, never anyone else's.
@@ -35,23 +35,23 @@ by construction: each user's MCP subprocess reads their own
 
 ```
                       opencode primary model
-                               ↓ (MCP/stdio)
+                               v (MCP/stdio)
                         Library MCP server  ──────────────────────┐
-                           ↓ (HTTP localhost)                     │
+                           v (HTTP localhost)                     │
     ┌──────────────────────┼──────────────────────┐              │
-    ↓                      ↓                      ↓              ↓
+    v                      v                      v              v
   SearxNG :8888       llama-embed :11437       llama-summarize :11435   docling-serve :5001
-  (search)            (multilingual-e5-large)  (Qwen3-4B)               (binary doc → markdown)
+  (search)            (multilingual-e5-large)  (Qwen3-4B)               (binary doc -> markdown)
                          GPU1 (Vulkan)            GPU1 (Vulkan)            CPU only
 ```
 
 Library is the orchestrator. All four sidecars are independent system
 services with their own lifecycles. If any sidecar is down, Library returns
-a structured `{"layer": "error", ...}` — the MCP protocol never sees a
+a structured `{"layer": "error", ...}` -- the MCP protocol never sees a
 crash.
 
 A fifth service, `llama-coder` on `:11438` (Qwen2.5-Coder-3B, GPU1 / Vulkan),
-also lives on the secondary card but is **not a Library client** — it's the
+also lives on the secondary card but is **not a Library client** -- it's the
 edit-prediction backend for Zed. Library doesn't call it; it shares VRAM
 with llama-embed and llama-summarize. See
 [docs/edit-prediction-on-secondary-research.md](docs/edit-prediction-on-secondary-research.md)
@@ -71,7 +71,7 @@ force-refresh ownership), see [docs/architecture.md](docs/architecture.md).
 
 The first three are part of the broader homelab AI stack (see
 `Workstation/second-opinion`). docling-serve installs as a dedicated
-system service — see [docs/architecture.md](docs/architecture.md#docling-sidecar)
+system service -- see [docs/architecture.md](docs/architecture.md#docling-sidecar)
 for the full setup.
 
 ## Quickstart
@@ -111,7 +111,7 @@ ranks the relevant Hebrew chunks correctly, and vice versa.
 
 **Summarization is currently English-primary.** The summarizer model
 (Qwen3-4B) handles English well but degrades on non-English source
-material — summaries may be generic, hallucinated, or default to English
+material -- summaries may be generic, hallucinated, or default to English
 explanations of non-English content. For non-English documents, escalate
 to `return_chunks=True` early; the chunks themselves are faithful to the
 source language.
@@ -124,14 +124,14 @@ for status and the resume path.
 
 ```
 library/
-├── server.py        ← MCP entry point. Three tools, dispatch, logging.
-├── cache.py         ← DRAM LRU cache. Files (mtime-keyed) + web pages (URL-keyed).
-├── chunkers.py      ← Document (header-aware) and code (fixed-window) strategies.
-├── converters.py    ← Binary doc → markdown via docling-serve HTTP.
-├── embedder.py      ← Cosine similarity + batch HTTP client for llama-embed.
-├── fetcher.py       ← Web fetch with SSRF defense and readability extraction.
-├── searcher.py      ← SearxNG queries + domain-boosted ranking.
-├── summarizer.py    ← Secondary-model summary with structured fallback.
+├── server.py        <- MCP entry point. Three tools, dispatch, logging.
+├── cache.py         <- DRAM LRU cache. Files (mtime-keyed) + web pages (URL-keyed).
+├── chunkers.py      <- Document (header-aware) and code (fixed-window) strategies.
+├── converters.py    <- Binary doc -> markdown via docling-serve HTTP.
+├── embedder.py      <- Cosine similarity + batch HTTP client for llama-embed.
+├── fetcher.py       <- Web fetch with SSRF defense and readability extraction.
+├── searcher.py      <- SearxNG queries + domain-boosted ranking.
+├── summarizer.py    <- Secondary-model summary with structured fallback.
 └── skills/
     └── (drop your skill markdown files here; empty by default)
 ```
@@ -141,11 +141,11 @@ These modules do what they say on the tin. The server is the entry point, cache 
 ## Running tests
 
 ```bash
-# Unit tests — no live services needed
+# Unit tests -- no live services needed
 uv run pytest tests/test_cache.py tests/test_chunkers.py tests/test_fetcher.py \
                tests/test_searcher.py tests/test_summarizer.py
 
-# Converter tests — mocked HTTP plus a hermetic e2e against running docling-serve
+# Converter tests -- mocked HTTP plus a hermetic e2e against running docling-serve
 uv run python tests/test_converters.py
 
 # End-to-end against live llama-embed + llama-summarize
@@ -153,7 +153,7 @@ uv run python tests/test_server_e2e.py
 ```
 
 The e2e suites print `SKIP` and exit 2 if their required servers aren't
-reachable — they don't fail.
+reachable -- they don't fail.
 
 ## Adding a skill
 
@@ -167,7 +167,7 @@ Here's how you do it: you create a markdown file in the skills folder, write you
 
 ## Logs
 
-Library logs JSONL to stderr — one event per line:
+Library logs JSONL to stderr -- one event per line:
 
 ```json
 {"ts": "2026-04-26T16:42:09Z", "event": "converted", "path": "...", "n_chunks": 62, "md_chars": 21546}
@@ -178,7 +178,7 @@ Useful event names: `research_start`, `research_done`, `picked`, `web_cache_hit`
 `web_cached`, `file_cache_hit`, `file_cached`, `converted`, `skill_returned`,
 `embed_error`, `fetch_error`. Filter with `jq -c 'select(.event == "converted")'`.
 
-These events tell you what's happening under the hood — when research starts, when files get cached, when chunks are converted, when skills are returned, and when errors occur. Keep an eye on them.
+These events tell you what's happening under the hood -- when research starts, when files get cached, when chunks are converted, when skills are returned, and when errors occur. Keep an eye on them.
 
 ## When something breaks
 
@@ -187,8 +187,8 @@ These events tell you what's happening under the hood — when research starts, 
 | `embed server unreachable`                    | `systemctl status llama-embed`              |
 | `docling-serve unreachable at ...:5001`       | `systemctl status docling-serve`            |
 | `SearxNG returned no results`                 | `curl http://127.0.0.1:8888/search?q=test`  |
-| Slow first call after restart                 | Sidecars warming up — normal, ~10s          |
-| Summary always low-confidence                 | llama-summarize down → graceful fallback    |
+| Slow first call after restart                 | Sidecars warming up -- normal, ~10s          |
+| Summary always low-confidence                 | llama-summarize down -> graceful fallback    |
 
 Errors are always structured: `{"layer": "error", "error": "...", "can_escalate": false}`.
 The primary model is told to fall back to direct webfetch / read after

@@ -3,7 +3,7 @@
 Uses the OpenAI-compatible /v1/embeddings endpoint. Batches sent as a single
 request to leverage llama-server's internal batching.
 
-No retry here — retry policy lives at the caller level (the server.py tool).
+No retry here -- retry policy lives at the caller level (the server.py tool).
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ REQUEST_TIMEOUT_SEC = 30
 # multilingual-e5-large is 512-token context (XLM-RoBERTa base); llama-server
 # rejects inputs that exceed the configured context (-c 512). We defensively
 # cap the character count per input so even token-dense content (worst case
-# 1 char per token) cannot overflow. Same 1024-dim output as mxbai — drop-in
+# 1 char per token) cannot overflow. Same 1024-dim output as mxbai -- drop-in
 # replacement at the protocol level. Adds Hebrew + 90+ other languages while
 # preserving English retrieval quality within a few percent of mxbai.
 MAX_CHARS_PER_INPUT = 500
@@ -33,7 +33,7 @@ class EmbedderError(RuntimeError):
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Embed a batch of texts. Returns a list of vectors in the same order.
 
-    Raises EmbedderError on HTTP or parsing failure. No partial results —
+    Raises EmbedderError on HTTP or parsing failure. No partial results --
     either every text gets a vector, or the call raises.
 
     Inputs longer than MAX_CHARS_PER_INPUT are truncated defensively to

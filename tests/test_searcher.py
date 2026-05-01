@@ -1,4 +1,4 @@
-"""Searcher tests — no live SearxNG needed for unit tests."""
+"""Searcher tests -- no live SearxNG needed for unit tests."""
 from __future__ import annotations
 from library.searcher import query_variations, rank_results
 
@@ -17,7 +17,7 @@ def test_query_variations_includes_original():
     assert q in variations
 
 def test_query_variations_deduplicates():
-    # Very short query — keyword strip may equal original
+    # Very short query -- keyword strip may equal original
     variations = query_variations("proxmox storage")
     assert len(variations) == len(set(variations))
 

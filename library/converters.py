@@ -2,7 +2,7 @@
 
 Posts file bytes to the local docling-serve daemon (default :5001) and
 returns markdown. Callers feed the markdown into the existing document
-chunker — no format-specific chunking lives here.
+chunker -- no format-specific chunking lives here.
 
 Design: Library reads file bytes itself (it has the user's permissions);
 docling-serve does not need filesystem access to user paths. This keeps
@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Multipart formatting via stdlib only — no extra deps.
+# Multipart formatting via stdlib only -- no extra deps.
 import mimetypes
 import os
 import secrets
