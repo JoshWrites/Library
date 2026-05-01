@@ -58,6 +58,51 @@ SKILLS_DIR = Path(__file__).parent / "skills"
 _EMBED_BATCH = 16
 
 
+def _resolve_skill_dirs() -> list[Path]:
+    """Return the ordered list of directories searched by get_skill().
+
+    User-configured directories from WS_SKILLS_DIRS (colon-separated path
+    list, like PATH) come first, in declaration order. The bundled
+    SKILLS_DIR is always appended last so default skills remain
+    available even when WS_SKILLS_DIRS is unset.
+
+    Nonexistent directories are dropped silently with a stderr log line
+    so a typo in user.env doesn't break the server. Path semantics:
+    relative paths are resolved against the server's cwd at startup;
+    absolute paths are preferred for stability across opencode sessions.
+    """
+    raw = os.environ.get("WS_SKILLS_DIRS", "")
+    user_dirs: list[Path] = []
+    seen: set[Path] = set()
+    for part in raw.split(":"):
+        part = part.strip()
+        if not part:
+            continue
+        p = Path(part).expanduser().resolve()
+        if p in seen:
+            continue
+        seen.add(p)
+        if not p.is_dir():
+            print(
+                json.dumps({
+                    "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "event": "skill_dir_missing",
+                    "path": str(p),
+                }),
+                file=sys.stderr,
+                flush=True,
+            )
+            continue
+        user_dirs.append(p)
+    # Bundled dir last so user dirs shadow on name collision.
+    if SKILLS_DIR not in seen:
+        user_dirs.append(SKILLS_DIR)
+    return user_dirs
+
+
+SKILL_DIRS: list[Path] = _resolve_skill_dirs()
+
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 
 def _log(event: str, **fields: Any) -> None:
@@ -328,32 +373,69 @@ def read_file(
     return result.to_dict(query)
 
 
+def _list_available_skills() -> list[str]:
+    """Return the deduped list of skill names visible across SKILL_DIRS.
+
+    Earlier directories shadow later ones on name collision (PATH-style),
+    so the returned name appears once even if multiple directories
+    contain a skill of that stem.
+    """
+    seen: set[str] = set()
+    names: list[str] = []
+    for d in SKILL_DIRS:
+        try:
+            for p in d.glob("*.md"):
+                if p.stem in seen:
+                    continue
+                seen.add(p.stem)
+                names.append(p.stem)
+        except OSError:
+            continue
+    names.sort()
+    return names
+
+
 @mcp.tool()
 def get_skill(name: str) -> dict:
     """Retrieve a skill's full instruction set by name.
 
-    Skills are on-demand instruction sets stored in the Library's skills/
-    directory. They are returned verbatim - no chunking, no embedding, no
-    summarization. The primary model applies the skill's instructions directly.
+    Skills are on-demand instruction sets returned verbatim - no
+    chunking, no embedding, no summarization. The primary model applies
+    the skill's instructions directly.
 
-    Available skills depend on what files exist in the skills/ directory at
-    runtime; the directory is empty by default. Call with a name you expect
-    to exist or with a placeholder; on miss the response lists what is there.
+    The Library searches a list of directories on each call. By default
+    only the Library's bundled skills/ directory is searched. Users can
+    add their own directories via the WS_SKILLS_DIRS environment
+    variable (colon-separated path list, like PATH) -- typically set
+    in ~/.config/workstation/user.env and propagated by
+    opencode-session.sh. User directories take precedence over the
+    bundled directory on name collision (first match wins). Available
+    skills depend on what .md files exist across the searched
+    directories at call time.
+
+    Call with a name you expect to exist or with a placeholder; on miss
+    the response lists what is available across all searched directories.
 
     Args:
         name: Skill name without extension (e.g., "voice-rewrite").
 
     Returns:
-        {"layer": "skill", "name": ..., "content": ...}
+        {"layer": "skill", "name": ..., "content": ..., "source": "..."}
         or {"layer": "error", "error": ..., "can_escalate": false}
     """
-    skill_path = SKILLS_DIR / f"{name}.md"
-    if not skill_path.exists():
-        available = [p.stem for p in SKILLS_DIR.glob("*.md")]
-        return _error(f"skill '{name}' not found. Available: {available}")
-    content = skill_path.read_text(encoding="utf-8")
-    _log("skill_returned", name=name, chars=len(content))
-    return {"layer": "skill", "name": name, "content": content}
+    for d in SKILL_DIRS:
+        skill_path = d / f"{name}.md"
+        if skill_path.is_file():
+            content = skill_path.read_text(encoding="utf-8")
+            _log("skill_returned", name=name, chars=len(content), source=str(d))
+            return {
+                "layer": "skill",
+                "name": name,
+                "content": content,
+                "source": str(d),
+            }
+    available = _list_available_skills()
+    return _error(f"skill '{name}' not found. Available: {available}")
 
 
 @mcp.tool()

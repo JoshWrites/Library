@@ -25,7 +25,12 @@ of raw text.
 
 `get_skill` returns the full skill content as plain text -- skills are
 finalized instruction sets (e.g., voice-rewriting passes) that should land
-in primary context exactly as written.
+in primary context exactly as written. Skills are looked up across a list
+of directories: the Library's bundled `library/skills/` plus any
+directories the user lists in `WS_SKILLS_DIRS` (colon-separated, like
+`PATH`). User directories take precedence over the bundled set on name
+collision (first match wins). Listing a missing skill aggregates names
+across all directories, deduped quietly.
 
 **Disk-write tools.** `convert` and `export` are different: they write the
 result to disk and return only metadata (path, byte count). The agent
