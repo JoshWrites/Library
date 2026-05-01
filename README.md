@@ -6,23 +6,37 @@ Here's the thing: you want one tool that handles research, file mining, and skil
 
 ## What it does
 
-Four MCP tools, one return contract:
+Six MCP tools, two return contracts:
 
 | Tool                    | Purpose                                       |
 |-------------------------|-----------------------------------------------|
 | `library_research`      | Web search -> fetch -> chunk -> embed -> rank -> summarize |
 | `library_read_file`     | Local file (or binary doc) -> chunk -> embed -> rank -> summarize |
 | `library_get_skill`     | Verbatim skill instruction set, no pipeline   |
+| `library_convert`       | Binary document -> text format on disk (docling sidecar) |
+| `library_export`        | Markdown (or other text) -> binary format on disk (pandoc) |
 | `library_context_usage` | Current opencode session token usage from the local DB |
 
-`research` and `read_file` return a **summary** by default. If the summary is
-insufficient, the same call with `return_chunks=True` returns the top-ranked
-verbatim chunks. This protects primary-model context -- a 50-page PDF returns
-~1-5 KB of distilled answer, not 30 KB of raw text.
+**Summary tools.** `research` and `read_file` return a **summary** by default.
+If the summary is insufficient, the same call with `return_chunks=True`
+returns the top-ranked verbatim chunks. This protects primary-model
+context -- a 50-page PDF returns ~1-5 KB of distilled answer, not 30 KB
+of raw text.
 
 `get_skill` returns the full skill content as plain text -- skills are
 finalized instruction sets (e.g., voice-rewriting passes) that should land
 in primary context exactly as written.
+
+**Disk-write tools.** `convert` and `export` are different: they write the
+result to disk and return only metadata (path, byte count). The agent
+never sees the converted content. Use them when the user wants the *full*
+file, not a summary. Cost on primary context is constant (~150 tokens)
+regardless of source size.
+
+`convert` accepts the same binary formats `read_file` does (pdf, docx,
+pptx, xlsx, epub, html, png, jpg, tiff) and emits md (default), json,
+html, text, or doctags. `export` is the inverse -- markdown (or rst,
+html, tex, org, txt) to docx, odt, rtf, html, epub, pdf, or latex.
 
 `context_usage` reads opencode's own SQLite session store and reports the
 active session's token total vs. the model's configured context limit. Use
@@ -62,6 +76,8 @@ force-refresh ownership), see [docs/architecture.md](docs/architecture.md).
 
 ## Prerequisites
 
+**Sidecar services:**
+
 | Service           | Where it lives        | Purpose                                          |
 |-------------------|-----------------------|--------------------------------------------------|
 | SearxNG           | `127.0.0.1:8888`      | Privacy-respecting search aggregator             |
@@ -73,6 +89,18 @@ The first three are part of the broader homelab AI stack (see
 `Workstation/second-opinion`). docling-serve installs as a dedicated
 system service -- see [docs/architecture.md](docs/architecture.md#docling-sidecar)
 for the full setup.
+
+**System binaries on PATH:**
+
+- `pandoc` -- required by `library_export` (markdown -> docx/pdf/odt/etc.).
+  Install via `sudo apt install pandoc`.
+- `texlive-xetex` -- only required if you want `library_export` to produce
+  PDF. Install via `sudo apt install texlive-xetex`. Other export targets
+  (docx, odt, html, epub, rtf, latex) need only `pandoc`.
+
+`library_convert` does not need pandoc; it goes through the docling-serve
+sidecar. `library_export` does not need docling; it goes through pandoc.
+The two engines never overlap.
 
 ## Quickstart
 
