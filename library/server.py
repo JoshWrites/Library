@@ -373,12 +373,40 @@ def read_file(
     return result.to_dict(query)
 
 
+def _resolve_skill(name: str) -> tuple[Path, Path] | None:
+    """Find a skill by name across SKILL_DIRS, two formats supported.
+
+    Returns (skill_file, skill_dir) for the first match, where:
+      - flat format: skill_file = <dir>/<name>.md, skill_dir = <dir>
+      - SKILL.md format: skill_file = <dir>/<name>/SKILL.md,
+                         skill_dir = <dir>/<name>
+
+    Earlier directories in SKILL_DIRS take precedence (PATH semantics).
+    Within a single directory the flat format takes precedence over the
+    SKILL.md subdirectory format if both happen to exist for the same
+    name -- a deliberate edge case decision; collisions like that are
+    rare and the flat file is a more explicit signal.
+    """
+    for d in SKILL_DIRS:
+        flat = d / f"{name}.md"
+        if flat.is_file():
+            return flat, d
+        nested = d / name / "SKILL.md"
+        if nested.is_file():
+            return nested, d / name
+    return None
+
+
 def _list_available_skills() -> list[str]:
     """Return the deduped list of skill names visible across SKILL_DIRS.
 
-    Earlier directories shadow later ones on name collision (PATH-style),
-    so the returned name appears once even if multiple directories
-    contain a skill of that stem.
+    Includes both formats:
+      - flat: any *.md file at the top of a SKILL_DIRS entry (stem = name)
+      - nested: any subdirectory of a SKILL_DIRS entry containing SKILL.md
+                (subdir name = skill name)
+
+    Earlier directories shadow later ones; flat files shadow nested
+    skills of the same name within the same directory.
     """
     seen: set[str] = set()
     names: list[str] = []
@@ -389,6 +417,15 @@ def _list_available_skills() -> list[str]:
                     continue
                 seen.add(p.stem)
                 names.append(p.stem)
+            for p in d.iterdir():
+                if not p.is_dir():
+                    continue
+                if not (p / "SKILL.md").is_file():
+                    continue
+                if p.name in seen:
+                    continue
+                seen.add(p.name)
+                names.append(p.name)
         except OSError:
             continue
     names.sort()
@@ -409,33 +446,48 @@ def get_skill(name: str) -> dict:
     variable (colon-separated path list, like PATH) -- typically set
     in ~/.config/workstation/user.env and propagated by
     opencode-session.sh. User directories take precedence over the
-    bundled directory on name collision (first match wins). Available
-    skills depend on what .md files exist across the searched
-    directories at call time.
+    bundled directory on name collision (first match wins).
+
+    Two on-disk formats are supported. Within each searched directory:
+      - Flat:   <dir>/<name>.md
+      - Nested: <dir>/<name>/SKILL.md (Anthropic Skills convention,
+                may have helper files alongside)
+
+    Listing a missing skill aggregates names across all searched
+    directories in both formats, deduped quietly.
 
     Call with a name you expect to exist or with a placeholder; on miss
-    the response lists what is available across all searched directories.
+    the response lists what is available.
 
     Args:
-        name: Skill name without extension (e.g., "voice-rewrite").
+        name: Skill name (e.g., "voice-rewrite" or "brainstorming"). No
+              extension; no path. Just the skill's identifier.
 
     Returns:
-        {"layer": "skill", "name": ..., "content": ..., "source": "..."}
-        or {"layer": "error", "error": ..., "can_escalate": false}
+        {"layer": "skill", "name": ..., "content": ..., "source": ...,
+         "directory": ...} -- "directory" is the skill's own directory
+                              when the nested format was used, or the
+                              parent directory for the flat format.
+                              Helper files referenced by SKILL.md (e.g.
+                              scripts/, references/) live under
+                              "directory" and can be read with `read`
+                              if the skill instructs you to.
+        {"layer": "error",  "error": ..., "can_escalate": false}
     """
-    for d in SKILL_DIRS:
-        skill_path = d / f"{name}.md"
-        if skill_path.is_file():
-            content = skill_path.read_text(encoding="utf-8")
-            _log("skill_returned", name=name, chars=len(content), source=str(d))
-            return {
-                "layer": "skill",
-                "name": name,
-                "content": content,
-                "source": str(d),
-            }
-    available = _list_available_skills()
-    return _error(f"skill '{name}' not found. Available: {available}")
+    found = _resolve_skill(name)
+    if found is None:
+        available = _list_available_skills()
+        return _error(f"skill '{name}' not found. Available: {available}")
+    skill_path, skill_dir = found
+    content = skill_path.read_text(encoding="utf-8")
+    _log("skill_returned", name=name, chars=len(content), path=str(skill_path))
+    return {
+        "layer": "skill",
+        "name": name,
+        "content": content,
+        "source": str(skill_path),
+        "directory": str(skill_dir),
+    }
 
 
 @mcp.tool()
