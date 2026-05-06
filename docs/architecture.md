@@ -254,25 +254,18 @@ local user without cross-home permission complexity.
 
 ## Skills
 
-A skill is a markdown file in `library/skills/`. Calling
-`library_get_skill(name)` returns the file content verbatim. No chunking,
-no embedding, no summarization -- skills are *finalized instruction sets*
-intended for the primary to follow as written.
+Skill loading is handled by opencode's native skill tool, gated through
+opencode's permission system. Library does not currently expose a skill
+tool of its own.
 
-Why a tool, not just bundling skills into AGENTS.md:
-
-- Skills can be long (a single voice-rewriting pass clocks in at ~6 KB).
-  Loading every skill into every session burns context.
-- Skills are situational. A prose-rewriting skill applies to prose
-  moments, not every turn. Pull-on-demand keeps context lean.
-- New skills can land without rewriting AGENTS.md every time. Drop the
-  markdown, restart the MCP, done.
-
-The first skill was a voice-rewriting pass for the user's own prose,
-and that one skill seeded this whole project: it needed to be callable
-from opencode without bloating context, which led to "use an MCP,"
-which led to "the existing MCPs have shape problems," which led to
-Library.
+The native harness path is preferred. If the harness ever proves
+ineffective at serving skills (permission friction, context bloat from
+auto-loaded skills, or skills that need pull-on-demand semantics the
+harness doesn't provide), Library can grow a `library_get_skill(name)`
+tool as a fallback -- a markdown file under `library/skills/` returned
+verbatim, no chunking, no embedding, no summarization. That path is
+intentionally not built today; the native harness mechanism handles
+the use case adequately.
 
 ## Multilingual support
 
@@ -366,8 +359,9 @@ unblocks the next step.
   letting the document chunker split mid-table.
 - **Persistent cache.** SQLite or filesystem-backed entries so a session
   restart doesn't lose state. Only meaningful once we have heavy users.
-- **More skills.** The voice-rewriting pass was the seed. As more
-  proven instruction sets emerge, they drop in without code changes.
+- **`library_get_skill` fallback.** If opencode's native skill tool
+  proves inadequate, expose a Library tool that returns a named
+  skill markdown verbatim. See the "Skills" section above.
 
 ## Provenance
 

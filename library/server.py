@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Library MCP server.
 
-Five tools:
+Four active tools:
 
   research(question, max_sources, return_chunks, force_refresh)
     -> summary layer (default) or chunk layer (return_chunks=True)
@@ -19,8 +19,11 @@ Five tools:
     -> {src_path, dest_path, output_format, bytes}
     Markdown -> binary format (docx/pdf/odt/etc.) on disk via pandoc.
 
-  context_usage(directory)
-    -> active opencode session token usage from the local SQLite store.
+A fifth tool, context_usage, is implemented but its @mcp.tool()
+decorator is commented out. Zed's ACP-beta context-window indicator
+renders the same information in the UI without burning a tool call.
+Re-enable by uncommenting the decorator if the UI surface ever
+regresses; see the comment block above the function for details.
 
 Skill loading is handled by opencode's native skill tool, gated through
 opencode's permission system. Library does not expose a skill tool.
@@ -468,7 +471,21 @@ def export(
     return {"layer": "exported", **result}
 
 
-@mcp.tool()
+# context_usage is currently DISABLED as an MCP tool. Zed's ACP-beta
+# feature flag (`feature_flags.acp-beta = "on"` in the Zed settings)
+# renders a live context-window indicator -- a ring with a percentage,
+# next to the model picker -- driven by opencode's `usage_update`
+# events. That UI surface answers the same question this tool was
+# built for ("how much context have I used?") without burning a tool
+# call or any tokens at all.
+#
+# The implementation below is left in place because the UI fix
+# depends on a Zed beta flag. If the flag is removed in a future Zed
+# release, or the indicator regresses, re-enable this tool by
+# uncommenting the @mcp.tool() decorator. No other changes needed --
+# the function and its opencode_state backend remain working.
+#
+# @mcp.tool()
 def context_usage(directory: str | None = None) -> dict:
     """Report current context-window usage for the active opencode session.
 

@@ -127,17 +127,22 @@ class Chunk:
 
 # ── Token estimation (approximate, no tokenizer dep) ─────────────────────────
 
-# mxbai-embed-large has a 512-token context hard limit. We size chunks to never
-# overflow it even for token-dense content.
+# The default embedding model (multilingual-e5-large) has a 512-token
+# context hard limit, and the same was true of the previous default
+# (mxbai-embed-large). We size chunks to never overflow it even for
+# token-dense content.
 #
-# Empirical: a 560-char Python chunk tokenized to 560 tokens (mxbai's tokenizer
-# effectively allocates ~1 token per character for code with short identifiers,
-# operators, and whitespace). So for the worst case we must assume 1 char = 1
-# token. That gives a hard char ceiling of 500.
+# Empirical (from the original mxbai sizing run): a 560-char Python
+# chunk tokenized to ~560 tokens because the tokenizer allocates
+# roughly 1 token per character for code with short identifiers,
+# operators, and whitespace. For the worst case we must assume 1 char
+# = 1 token, which gives a hard char ceiling of 500. Multilingual-e5-
+# large uses an XLM-RoBERTa tokenizer with similar worst-case behavior
+# on dense text, so the 500-char ceiling carries over unchanged.
 #
-# For prose (~4 chars/token), 500 chars is under-sized, but that's okay -- the
-# retriever will just produce more, smaller chunks, each still semantically
-# coherent at the section level.
+# For prose (~4 chars/token), 500 chars is under-sized, but that's
+# okay -- the retriever will just produce more, smaller chunks, each
+# still semantically coherent at the section level.
 #
 # TARGET_CHARS is the chunk-aim; MAX_CHARS is the hard limit we never cross.
 TARGET_CHARS = 400
