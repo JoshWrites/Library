@@ -21,7 +21,7 @@ import urllib.request
 from typing import Any
 
 
-SEARXNG_URL = os.environ.get("LIBRARY_SEARXNG_URL", "http://127.0.0.1:8888")
+SEARXNG_URL = os.environ.get("LIBRARY_SEARXNG_URL") or "http://127.0.0.1:8888"
 SEARCH_TIMEOUT_SEC = 15
 USER_AGENT = "library-mcp/0.1 (local research helper)"
 

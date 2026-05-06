@@ -216,6 +216,15 @@ library/
 
 ## Running tests
 
+Pytest lives under the `dev` optional dependency group. Install it
+once:
+
+```bash
+uv sync --extra dev
+```
+
+Then:
+
 ```bash
 # Unit tests -- no live services needed
 uv run pytest tests/test_cache.py tests/test_chunkers.py tests/test_fetcher.py \

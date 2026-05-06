@@ -25,11 +25,13 @@ import urllib.request
 from dataclasses import dataclass
 
 
-LLAMA_URL = os.environ.get(
-    "LIBRARY_SUMMARIZE_URL", "http://127.0.0.1:11435/v1/chat/completions"
+LLAMA_URL = (
+    os.environ.get("LIBRARY_SUMMARIZE_URL")
+    or "http://127.0.0.1:11435/v1/chat/completions"
 )
-LLAMA_MODEL = os.environ.get(
-    "LIBRARY_SUMMARIZE_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+LLAMA_MODEL = (
+    os.environ.get("LIBRARY_SUMMARIZE_MODEL")
+    or "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
 )
 DISTILL_TIMEOUT_SEC = 45
 

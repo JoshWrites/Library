@@ -24,8 +24,8 @@ import urllib.error
 import urllib.request
 
 
-EMBED_URL = os.environ.get("LIBRARY_EMBED_URL", "http://127.0.0.1:11437/v1/embeddings")
-EMBED_MODEL = os.environ.get("LIBRARY_EMBED_MODEL", "multilingual-e5-large")
+EMBED_URL = os.environ.get("LIBRARY_EMBED_URL") or "http://127.0.0.1:11437/v1/embeddings"
+EMBED_MODEL = os.environ.get("LIBRARY_EMBED_MODEL") or "multilingual-e5-large"
 REQUEST_TIMEOUT_SEC = 30
 
 # multilingual-e5-large is 512-token context (XLM-RoBERTa base); llama-server
