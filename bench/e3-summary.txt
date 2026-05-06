@@ -1,7 +1,0 @@
---- E3 summary ---
-edit-prediction: n=3600 ok=3600 fail=0 p50=777ms p95=814ms
-embed: n=240 ok=240 fail=0 p50=388ms p95=583ms
-VRAM used: start=8.12GB  end=8.12GB  max=8.12GB  delta=+0MB
-Server stderr error-class lines: 1
-  llama_params_fit: failed to fit params to free device memory: n_gpu_layers already set by user to 99, abort
-New GPU-relevant dmesg lines: 0

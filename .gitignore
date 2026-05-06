@@ -8,7 +8,20 @@ dist/
 build/
 *.lock
 
-# Bench artifacts that are too large or empty for git
+# Bench artifacts -- generated locally, not portable across machines.
+bench/*.log
+bench/*.csv
+bench/*.ndjson
+bench/e*-run.log
 bench/e3-server.log
 bench/e3-dmesg-before.log
 bench/e3-dmesg-after.log
+
+# OS / editor noise
+.DS_Store
+*.swp
+
+# Local config (load via env vars or this file is the contract)
+.env
+.env.*
+!.env.example

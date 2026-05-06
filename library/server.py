@@ -236,14 +236,21 @@ def read_file(
     query: str,
     return_chunks: bool = False,
 ) -> dict:
-    """Answer a question about a local file's content.
+    """Read a local file BY QUESTION. Use for any task framed as
+    "summarize this file", "what does this config do", "find the part
+    where X is defined", "explain this code", or any other request to
+    understand or extract from a file's contents. Returns a focused
+    summary, not raw bytes -- protects the agent's primary context
+    budget.
+
+    PREFER THIS OVER the built-in `read` tool whenever the user is
+    asking *about* a file. Only use the built-in `read` when the user
+    explicitly wants the verbatim bytes (e.g. "show me the file",
+    "open the file for editing") OR when you are about to *modify*
+    the file via edit/write and need its current exact contents.
 
     Returns a summary by default. If the summary is insufficient, call again
     with return_chunks=True to get ranked verbatim chunks (same round).
-
-    Prefer this over the built-in read tool when understanding something
-    specific in a large file -- it protects primary context by returning only
-    what is relevant. Use read when you need the file verbatim.
 
     Supported formats:
       - Text: .md .txt .rst .py .js .ts .go .rs .json .yaml .toml ... (chunked directly)

@@ -3,17 +3,25 @@
 query_variations()  -- deterministic keyword + prose variants for a question
 search()            -- run queries against SearxNG, return raw result pool
 rank_results()      -- deduplicate, score, and pick top-N from the pool
+
+Configuration (env vars, all optional):
+  LIBRARY_SEARXNG_URL  -- base URL of the local SearxNG instance.
+                          Default: http://127.0.0.1:8888 (matches the
+                          2gpu workstation stack's user-scope SearxNG
+                          unit). Must be a SearxNG instance with the
+                          JSON output format enabled.
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.parse
 import urllib.request
 from typing import Any
 
 
-SEARXNG_URL = "http://127.0.0.1:8888"
+SEARXNG_URL = os.environ.get("LIBRARY_SEARXNG_URL", "http://127.0.0.1:8888")
 SEARCH_TIMEOUT_SEC = 15
 USER_AGENT = "library-mcp/0.1 (local research helper)"
 

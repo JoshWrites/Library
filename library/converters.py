@@ -7,6 +7,13 @@ chunker -- no format-specific chunking lives here.
 Design: Library reads file bytes itself (it has the user's permissions);
 docling-serve does not need filesystem access to user paths. This keeps
 docling-serve isolated and lets it run as a dedicated system user.
+
+Configuration (env vars, all optional):
+  LIBRARY_DOCLING_URL  -- full /v1/convert/file URL. Default:
+                          http://127.0.0.1:5001/v1/convert/file. Set to
+                          empty string to disable docling integration
+                          entirely; the convert tool will then return a
+                          structured error for any binary input.
 """
 from __future__ import annotations
 
@@ -21,7 +28,9 @@ import os
 import secrets
 
 
-DOCLING_URL = "http://127.0.0.1:5001/v1/convert/file"
+DOCLING_URL = os.environ.get(
+    "LIBRARY_DOCLING_URL", "http://127.0.0.1:5001/v1/convert/file"
+)
 CONVERT_TIMEOUT_SEC = 120  # generous; large PDFs can take a while
 MAX_BYTES = 50_000_000  # 50 MB cap per document
 

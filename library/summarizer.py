@@ -1,19 +1,36 @@
 """Secondary inference for Library.
 
-Sends a question + list of text chunks to the secondary llama-server
-and returns a SummaryResult. If the server is offline, returns a
-low-confidence result so the caller can offer chunk escalation instead.
+Sends a question + list of text chunks to a small chat model on a
+sidecar llama-server and returns a SummaryResult. If the server is
+offline, returns a low-confidence result so the caller can offer
+chunk escalation instead.
+
+Configuration (env vars, all optional):
+  LIBRARY_SUMMARIZE_URL    -- full /v1/chat/completions URL. Default:
+                              http://127.0.0.1:11435/v1/chat/completions
+                              (matches the 2gpu workstation stack's
+                              llama-secondary sidecar).
+  LIBRARY_SUMMARIZE_MODEL  -- model id sent to llama-server. Default:
+                              Qwen3-4B-Instruct-2507-Q4_K_M.gguf. Must
+                              match what the sidecar is serving and be
+                              chat/instruct-tuned (a base/completion model
+                              produces uncontrolled output).
 """
 from __future__ import annotations
 
 import json
+import os
 import re
 import urllib.request
 from dataclasses import dataclass
 
 
-LLAMA_URL = "http://127.0.0.1:11435/v1/chat/completions"
-LLAMA_MODEL = "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+LLAMA_URL = os.environ.get(
+    "LIBRARY_SUMMARIZE_URL", "http://127.0.0.1:11435/v1/chat/completions"
+)
+LLAMA_MODEL = os.environ.get(
+    "LIBRARY_SUMMARIZE_MODEL", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
+)
 DISTILL_TIMEOUT_SEC = 45
 
 _SYSTEM_PROMPT = """\

@@ -1,20 +1,31 @@
-"""HTTP client for the llama-embed server on :11437.
+"""HTTP client for the embeddings sidecar.
 
 Uses the OpenAI-compatible /v1/embeddings endpoint. Batches sent as a single
 request to leverage llama-server's internal batching.
 
 No retry here -- retry policy lives at the caller level (the server.py tool).
+
+Configuration (env vars, all optional):
+  LIBRARY_EMBED_URL    -- full /v1/embeddings URL. Default:
+                          http://127.0.0.1:11437/v1/embeddings (matches the
+                          2gpu workstation stack's llama-embed sidecar).
+  LIBRARY_EMBED_MODEL  -- model id sent to llama-server. Default:
+                          multilingual-e5-large. Must match what the sidecar
+                          is serving and produce 1024-dim vectors (the
+                          mnemory qdrant collection schema is locked to 1024
+                          on first use).
 """
 
 from __future__ import annotations
 
 import json
+import os
 import urllib.error
 import urllib.request
 
 
-EMBED_URL = "http://127.0.0.1:11437/v1/embeddings"
-EMBED_MODEL = "multilingual-e5-large"
+EMBED_URL = os.environ.get("LIBRARY_EMBED_URL", "http://127.0.0.1:11437/v1/embeddings")
+EMBED_MODEL = os.environ.get("LIBRARY_EMBED_MODEL", "multilingual-e5-large")
 REQUEST_TIMEOUT_SEC = 30
 
 # multilingual-e5-large is 512-token context (XLM-RoBERTa base); llama-server
